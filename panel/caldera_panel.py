@@ -47,6 +47,8 @@ F_TEXT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 18)
 F_SMALL = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 14)
 F_DB = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 54)
 F_FMT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 21)
+F_DBFS = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 68)
+F_DBFS_DEC = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 30)
 
 BG = (12, 12, 14)
 FG = (235, 235, 235)
@@ -245,8 +247,16 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
     num = volume_db(vol)
     if num.endswith(" dB"):
         num = num[:-3]
-    d.text((cx, 62), num, font=F_DB, fill=FG, anchor="mm")
-    d.text((cx, 114), "dB", font=F_FMT, fill=DIM, anchor="mm")
+    if "." in num:
+        ip, dec = num.split(".")
+        wi = d.textlength(ip, font=F_DBFS)
+        wd = d.textlength("." + dec, font=F_DBFS_DEC)
+        x0 = cx - (wi + wd) / 2
+        d.text((x0, 92), ip, font=F_DBFS, fill=FG, anchor="ls")
+        d.text((x0 + wi, 92), "." + dec, font=F_DBFS_DEC, fill=FG, anchor="ls")
+    else:
+        d.text((cx, 66), num, font=F_DBFS, fill=FG, anchor="mm")
+    d.text((cx, 118), "dB", font=F_FMT, fill=DIM, anchor="mm")
     # vertical volume bar, fills bottom-up
     bx0, bx1, by0, by1 = cx - 14, cx + 14, 150, 305
     d.rectangle((bx0, by0, bx1, by1), fill=(40, 40, 45))
