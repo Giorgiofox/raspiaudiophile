@@ -163,9 +163,12 @@ kills the remote shell.
      (preamp-display typography), white "dB" unit, vertical volume bar
 - dB scale: hi-fi attenuator style, 0.5 dB/step (vol 100 = 0 dB, vol 45 =
   -27.5 dB). To be calibrated against Caldera's real curve (UCA202 loopback)
-- Planned views: VU meter (ALSA multi/loopback tap or Caldera viz API —
-  the daemon logs mention `vizBoost`, worth probing), signal-path +
-  loudness screen (LUFS/LRA/peak from the Plex analysis), clock when idle
+- Planned views: VU meter — analog style (cream face, arc scale with red
+  0/+3 zone, true 300 ms VU ballistics), first version a SINGLE fullscreen
+  needle on the L+R mono sum, stereo pair later. Data via ALSA
+  multi/loopback tap (or Caldera viz API — the daemon logs mention
+  `vizBoost`, worth probing). Then: signal-path + loudness screen
+  (LUFS/LRA/peak from the Plex analysis), clock when idle
 
 TFT bring-up facts (hard-won):
 
