@@ -1,6 +1,6 @@
 [Unit]
 Description=Caldera now-playing panel (TFT + encoder)
-After=caldera-music.service
+After=
 
 [Service]
 Type=simple
