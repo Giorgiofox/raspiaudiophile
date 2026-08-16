@@ -8,7 +8,7 @@ I2S DAC HAT. Powered by [Caldera Music headless](https://caldera.homes/music/hea
 Deployed and registered with plex.tv as player "RaspiAudiophile".
 
 - Host: `RaspiAudiophile`, user `giorgiofox`, IP `192.168.1.187` (Wi-Fi, DHCP —
-  add a router reservation or move to Ethernet). SSH alias: `ssh caldera`
+  add a router reservation). SSH alias: `ssh caldera`
 - Caldera Music 1.0.47, user service enabled, linger on
 - Interim DAC: Behringer UCA202 (USB, 16-bit/48 kHz max) on
   `hw:CARD=CODEC,DEV=0`, `audio.sampleRate=48000` (Caldera resamples 96 -> 48)
@@ -36,7 +36,7 @@ systemctl --user restart caldera-music
 | Board | Raspberry Pi 3B / 3B+ |
 | DAC | Leikurvo HiFi DAC HAT, PCM5122, dual oscillator, RCA out |
 | Storage | microSD 16 GB (music is streamed from Plex, card holds only OS + cache) |
-| Network | Ethernet preferred; Wi-Fi works (FLAC 24/96 is ~5 Mbps) |
+| Network | Wi-Fi 5 GHz (3B+, -25 dBm, 433 Mbps link — final choice; FLAC 24/96 is ~5 Mbps). Rear-panel RJ45 still in the case design as fallback |
 | Output | HAT RCA -> amplifier line input. Ignore the 3.5 mm jack on the HAT and on the Pi |
 
 The HAT sits on the full 40-pin GPIO header. Audio travels over I2S, so the
@@ -140,7 +140,11 @@ Inputs: RCA. Outputs: screw terminals (OUT1/OUT2). Supply: 15-36 V DC via
 barrel jack or VCC/GND screw terminals. Has STBY/MUTE header and fan header.
 
 Everything goes in a metal case with 3D-printed PETG front/rear panels (PETG
-acts as the RF window for the Pi's Wi-Fi antenna; Ethernet still preferred).
+acts as the RF window for the Pi's Wi-Fi antenna). Wi-Fi is the final network
+choice: signal is excellent and the box is always on, so the ~10 s of boot
+time Ethernet would save is irrelevant. Constraint for the CAD: the Pi's
+antenna corner (by the SD slot) must face a PETG panel up close. A rear-panel
+RJ45 pass-through stays in the design as a cheap fallback.
 
 Power scheme (external PSU, no mains inside the case):
 
@@ -200,7 +204,8 @@ apt-daily / man-db / dpkg-db-backup / e2scrub timers. `config.txt`:
 power save off (`/etc/NetworkManager/conf.d/wifi-powersave.conf`).
 
 Remaining bottleneck is NetworkManager (~12 s, Wi-Fi association + DHCP);
-moving to Ethernet inside the case will cut most of it. Caldera starts
+Ethernet would cut most of it, but Wi-Fi was kept (always-on appliance,
+boot time is rare); initial_turbo=60 added 2026-08-16. Caldera starts
 without waiting for network and registers once the link is up
 (`Restart=on-failure` covers the edge cases).
 
@@ -211,7 +216,7 @@ without waiting for network and registers once the link is up
 | No `sndrpihifiberry` in `aplay -l` | `config.txt`: overlay line present, onboard audio off; HAT seated on all 40 pins |
 | Player not visible in Plexamp | `systemctl --user status caldera-music`; same LAN/subnet as the controller; login step completed |
 | Player vanishes / spinner in Plexamp | Known Caldera 1.0.47 bug: after a playback stop, a `findBestConnection: waiting for in-flight race` can freeze the shared event loop, so Companion (port 32500) stops answering even on localhost. Diagnose with `curl -m 5 http://localhost:32500/resources`. Mitigated by `caldera-watchdog.timer` (user unit, probes every 30 s and restarts the service on timeout); worst case the player is gone ~35 s. Service runs with `--verbose` (drop-in `verbose.conf`) to capture evidence for an upstream report |
-| Dropouts on Wi-Fi | Move to Ethernet; Pi 3B Wi-Fi is 2.4 GHz only |
+| Dropouts on Wi-Fi | Check signal (`iw dev wlan0 link`, was -25 dBm); verify powersave still off; RJ45 fallback exists on the rear panel |
 | Service dies after SSH logout | `loginctl enable-linger caldera` was skipped |
 | Hiss or hum on the amp | Use RCA out (not 3.5 mm); try a different PSU — cheap chargers inject noise |
 
