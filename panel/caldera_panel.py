@@ -40,6 +40,7 @@ COVER_FS = 320   # fullscreen view
 TIMELINE_URL = "http://localhost:32500/player/timeline/poll?wait=0&commandID=1"
 PREFS = Path.home() / ".config/caldera-music/preferences.json"
 POLL_S = 1.0
+PAUSED_TO_IDLE_S = 600  # after 10 min paused, show the idle screen
 
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 F_TITLE = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
@@ -320,10 +321,18 @@ def main() -> None:
     last_frame = b""
     last_vol = -1
     vol_changed_at = 0.0
+    paused_since = 0.0
 
     while True:
         tl = timeline()
-        if tl is None or tl.get("state") in (None, "stopped") or "key" not in tl:
+        state = tl.get("state") if tl else None
+        if state == "paused":
+            if paused_since == 0.0:
+                paused_since = time.monotonic()
+        else:
+            paused_since = 0.0
+        stale_pause = paused_since and time.monotonic() - paused_since > PAUSED_TO_IDLE_S
+        if tl is None or state in (None, "stopped") or "key" not in tl or stale_pause:
             vol = int(tl.get("volume", 0)) if tl else 0
             img = render_idle(vol)
             last_key = None
