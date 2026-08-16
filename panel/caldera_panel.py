@@ -256,7 +256,7 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
         d.text((x0 + wi, 92), "." + dec, font=F_DBFS_DEC, fill=FG, anchor="ls")
     else:
         d.text((cx, 66), num, font=F_DBFS, fill=FG, anchor="mm")
-    d.text((cx, 118), "dB", font=F_FMT, fill=DIM, anchor="mm")
+    d.text((cx, 124), "dB", font=F_DBFS_DEC, fill=FG, anchor="mm")
     # vertical volume bar, fills bottom-up
     bx0, bx1, by0, by1 = cx - 14, cx + 14, 150, 305
     d.rectangle((bx0, by0, bx1, by1), fill=(40, 40, 45))
