@@ -241,12 +241,19 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
         frac = min(t_ms / dur_ms, 1.0)
         if levels:
             lv = np.array(levels, dtype=float)
-            idx = (np.linspace(0, len(lv) - 1, cols)).astype(int)
-            amp = np.clip((lv[idx] + 50) / 50, 0.02, 1.0)  # -50..0 dB -> 0..1
+            # bucket mean -> per-track percentile normalization -> smoothing
+            edges = np.linspace(0, len(lv), cols + 1).astype(int)
+            amp = np.array([lv[a:b].mean() if b > a else lv[min(a, len(lv) - 1)]
+                            for a, b in zip(edges[:-1], edges[1:])])
+            lo, hi = np.percentile(amp, 5), np.percentile(amp, 99)
+            amp = np.clip((amp - lo) / max(hi - lo, 1e-6), 0.03, 1.0)
+            k = np.ones(5) / 5
+            amp = np.convolve(amp, k, mode="same")
             played = int(cols * frac)
+            d.line((x0, yc, x1, yc), fill=(95, 95, 104))  # baseline: full extent
             for i in range(cols):
                 h = max(1, int(half_max * amp[i]))
-                c = ACCENT if i <= played else (70, 70, 76)
+                c = ACCENT if i <= played else (95, 95, 104)
                 d.line((x0 + i, yc - h, x0 + i, yc + h), fill=c)
         else:
             d.rectangle((x0, yc - 2, x1, yc + 2), fill=(50, 50, 55))
