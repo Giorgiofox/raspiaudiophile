@@ -103,6 +103,7 @@ def fetch_meta(tl: dict) -> dict:
     st = None
     if part is not None:
         st = part.find("Stream")
+    stream_id = st.get("id") if st is not None else None
     fmt = ""
     if media is not None:
         codec = (media.get("audioCodec") or "").upper()
@@ -120,6 +121,7 @@ def fetch_meta(tl: dict) -> dict:
         "album": track.get("parentTitle", "") if track is not None else "",
         "thumb": track.get("thumb", "") if track is not None else "",
         "format": fmt,
+        "stream_id": stream_id,
     }
 
 
@@ -139,6 +141,19 @@ def fetch_cover(tl: dict, thumb: str) -> Image.Image | None:
         r.raise_for_status()
         return Image.open(io.BytesIO(r.content)).convert("RGB")
     except (requests.RequestException, OSError):
+        return None
+
+
+def fetch_levels(tl: dict, stream_id: str | None) -> list[float] | None:
+    """Whole-track loudness envelope (dB) from the Plex sonic analysis."""
+    if not stream_id:
+        return None
+    url = f"{server_base(tl)}/library/streams/{stream_id}/levels"
+    try:
+        r = requests.get(url, params={"X-Plex-Token": token()}, timeout=8)
+        r.raise_for_status()
+        return [float(lv.get("v", "-60")) for lv in ET.fromstring(r.text)]
+    except (requests.RequestException, ET.ParseError, ValueError):
         return None
 
 
@@ -195,7 +210,7 @@ def touch_listener() -> None:
 
 
 def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
-           t_ms: int, dur_ms: int) -> Image.Image:
+           t_ms: int, dur_ms: int, levels: list[float] | None = None) -> Image.Image:
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
 
@@ -218,18 +233,30 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
     icon = {"playing": "▶", "paused": "⏸"}.get(state, "⏹")
     d.text((x, y + 96), f"{icon} {state}", font=F_TEXT, fill=ACCENT)
 
-    # bottom strip, full width
+    # bottom strip: waveform seekbar (loudness envelope), full width
     if dur_ms > 0:
-        yb = 208
-        d.rectangle((8, yb, W - 8, yb + 5), fill=(50, 50, 55))
-        px = 8 + int((W - 16) * min(t_ms / dur_ms, 1.0))
-        d.rectangle((8, yb, px, yb + 5), fill=ACCENT)
+        yc, half_max = 224, 26
+        x0, x1 = 8, W - 8
+        cols = x1 - x0
+        frac = min(t_ms / dur_ms, 1.0)
+        if levels:
+            lv = np.array(levels, dtype=float)
+            idx = (np.linspace(0, len(lv) - 1, cols)).astype(int)
+            amp = np.clip((lv[idx] + 50) / 50, 0.02, 1.0)  # -50..0 dB -> 0..1
+            played = int(cols * frac)
+            for i in range(cols):
+                h = max(1, int(half_max * amp[i]))
+                c = ACCENT if i <= played else (70, 70, 76)
+                d.line((x0 + i, yc - h, x0 + i, yc + h), fill=c)
+        else:
+            d.rectangle((x0, yc - 2, x1, yc + 2), fill=(50, 50, 55))
+            d.rectangle((x0, yc - 2, x0 + int(cols * frac), yc + 2), fill=ACCENT)
         mins = lambda ms: f"{ms // 60000}:{ms % 60000 // 1000:02d}"
-        d.text((8, yb + 12), mins(t_ms), font=F_SMALL, fill=DIM)
-        d.text((W - 8, yb + 12), mins(dur_ms), font=F_SMALL, fill=DIM, anchor="ra")
+        d.text((x0, yc + half_max + 4), mins(t_ms), font=F_SMALL, fill=DIM)
+        d.text((x1, yc + half_max + 4), mins(dur_ms), font=F_SMALL, fill=DIM, anchor="ra")
 
     # volume: bar left, big dB right
-    yv = 288
+    yv = 296
     d.rectangle((8, yv, 220, yv + 10), fill=(50, 50, 55))
     d.rectangle((8, yv, 8 + int(212 * vol / 100), yv + 10), fill=ACCENT)
     d.text((W - 8, H - 8), volume_db(vol), font=F_DB, fill=FG, anchor="rs")
@@ -279,6 +306,7 @@ def main() -> None:
     last_key = None
     meta: dict = {}
     cover: Image.Image | None = None
+    levels: list[float] | None = None
     last_frame = b""
     last_vol = -1
     vol_changed_at = 0.0
@@ -300,16 +328,18 @@ def main() -> None:
                 try:
                     meta = fetch_meta(tl)
                     cover = fetch_cover(tl, meta["thumb"])
+                    levels = fetch_levels(tl, meta.get("stream_id"))
                     last_key = key
                 except (requests.RequestException, ET.ParseError):
-                    meta, cover = {"title": "?", "artist": "", "album": "",
-                                   "thumb": "", "format": ""}, None
+                    meta, cover, levels = {"title": "?", "artist": "", "album": "",
+                                           "thumb": "", "format": ""}, None, None
             if VIEW["fullscreen"]:
                 show_vol = time.monotonic() - vol_changed_at < 2.5
                 img = render_fullscreen(cover, vol, show_vol)
             else:
                 img = render(tl.get("state", "?"), vol, meta, cover,
-                             int(tl.get("time", 0)), int(tl.get("duration", 0)))
+                             int(tl.get("time", 0)), int(tl.get("duration", 0)),
+                             levels)
 
         frame = img.tobytes()
         if frame != last_frame:  # skip identical frames, spare the SPI bus
