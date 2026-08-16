@@ -270,7 +270,7 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
     tw = d.textlength(num, font=F_DB)
     d.text((W - 8, H - 10), num, font=F_DB, fill=FG, anchor="rs")
     bx1 = int(W - 8 - tw - 26)          # fixed gap from the number
-    yc = H - 10 - 20                    # optical center of the 54px digits
+    yc = H - 10 - 15                    # aligned with the minus-sign height
     if bx1 > 60:
         d.rectangle((8, yc - 5, bx1, yc + 5), fill=(50, 50, 55))
         d.rectangle((8, yc - 5, 8 + int((bx1 - 8) * vol / 100), yc + 5), fill=ACCENT)
