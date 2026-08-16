@@ -241,13 +241,12 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
         frac = min(t_ms / dur_ms, 1.0)
         if levels:
             lv = np.array(levels, dtype=float)
-            # bucket mean -> per-track percentile normalization -> smoothing
-            edges = np.linspace(0, len(lv), cols + 1).astype(int)
-            amp = np.array([lv[a:b].mean() if b > a else lv[min(a, len(lv) - 1)]
+            lin = np.power(10.0, lv / 20.0)  # dB -> linear amplitude, like Plexamp
+            edges = np.linspace(0, len(lin), cols + 1).astype(int)
+            amp = np.array([lin[a:b].mean() if b > a else lin[min(a, len(lin) - 1)]
                             for a, b in zip(edges[:-1], edges[1:])])
-            lo, hi = np.percentile(amp, 5), np.percentile(amp, 99)
-            amp = np.clip((amp - lo) / max(hi - lo, 1e-6), 0.03, 1.0)
-            k = np.ones(5) / 5
+            amp = np.clip(amp / max(np.percentile(amp, 99), 1e-9), 0.015, 1.0)
+            k = np.ones(3) / 3
             amp = np.convolve(amp, k, mode="same")
             played = int(cols * frac)
             d.line((x0, yc, x1, yc), fill=(95, 95, 104))  # baseline: full extent
