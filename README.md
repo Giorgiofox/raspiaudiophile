@@ -198,8 +198,23 @@ and auto-standby when Caldera is idle.
   | Encoder SW | 13 | 33 | internal pull-up |
   | Encoder common + SW return | - | 30, 34 | GND |
 
-  Test the 2015-vintage TFT electrically before cutting its front-panel
-  opening. Spare Pi 2 boards (Ethernet only) are earmarked for future wired
+  Status: TFT running since 2026-08-16 (plugged directly on the header until
+  the HAT arrives). Key facts learned:
+  - The kernel dropped fb_mz61581; the stock `mz61581` overlay silently binds
+    fb_s6d02a1 (wrong init, black screen). Custom `caldera-tft.dtbo` (source
+    in pi/boot/caldera-tft.dts) binds fb_ili9481 instead (MZ61581 = R61581
+    clone) at 32 MHz — 128 MHz corrupts frames with this init
+  - Backlight: GPIO18, active-low, on/off only (no PWM levels). WARNING:
+    GPIO18 collides with the DAC HAT's I2S — when rewiring the TFT on jumper
+    leads, move the LED line to GPIO12 (hardware PWM, enables dimming)
+  - Boot console on the TFT: `fbcon=map:1` (fb0 is the firmware framebuffer,
+    fb1 the TFT — stable order with vc4-kms-v3d disabled); vc4 was removed
+    (headless, TFT is the only screen). consoleblank=0. A root oneshot
+    (caldera-tft-vtunbind.service) releases the console after boot so
+    caldera-panel owns the screen; the panel finds the fb by driver name
+  - caldera-panel.service (user) runs panel/caldera_panel.py: cover art +
+    track info from Plex, state/volume from the local Companion timeline,
+    dB readout, RGB565 rendering via Pillow/numpy Spare Pi 2 boards (Ethernet only) are earmarked for future wired
   multi-room zones, one PCM5122 HAT each; the 3B+ stays the main unit.
 - v2: detachable display remote — Waveshare ESP32-C6-LCD-1.47 (172x320 LCD,
   onboard LiPo charging) + EC11 encoder + LiPo 500-900 mAh. Magnetic 3-pin
