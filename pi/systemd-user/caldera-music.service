@@ -1,0 +1,14 @@
+[Unit]
+Description=Caldera Music Player
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=%h/caldera-music/lib
+ExecStart=%h/caldera-music/bin/caldera-music --config %h/.config/caldera-music
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

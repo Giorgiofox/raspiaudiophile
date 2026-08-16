@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Caldera health check every 30s
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=30
+
+[Install]
+WantedBy=timers.target

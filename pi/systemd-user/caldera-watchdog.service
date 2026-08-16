@@ -1,0 +1,6 @@
+[Unit]
+Description=Caldera Companion health check
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/systemd/user/caldera-watchdog.sh
