@@ -265,11 +265,15 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
         d.text((x0, yc + half_max + 4), mins(t_ms), font=F_SMALL, fill=DIM)
         d.text((x1, yc + half_max + 4), mins(dur_ms), font=F_SMALL, fill=DIM, anchor="ra")
 
-    # volume: bar left, big dB right
-    yv = 296
-    d.rectangle((8, yv, 220, yv + 10), fill=(50, 50, 55))
-    d.rectangle((8, yv, 8 + int(212 * vol / 100), yv + 10), fill=ACCENT)
-    d.text((W - 8, H - 8), volume_db(vol), font=F_DB, fill=FG, anchor="rs")
+    # volume: big dB right, bar filling the space left of it
+    num = volume_db(vol)
+    tw = d.textlength(num, font=F_DB)
+    d.text((W - 8, H - 10), num, font=F_DB, fill=FG, anchor="rs")
+    bx1 = int(W - 8 - tw - 26)          # fixed gap from the number
+    yc = H - 10 - 20                    # optical center of the 54px digits
+    if bx1 > 60:
+        d.rectangle((8, yc - 5, bx1, yc + 5), fill=(50, 50, 55))
+        d.rectangle((8, yc - 5, 8 + int((bx1 - 8) * vol / 100), yc + 5), fill=ACCENT)
     return img
 
 
