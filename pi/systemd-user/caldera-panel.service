@@ -1,6 +1,5 @@
 [Unit]
 Description=Caldera now-playing panel (TFT + encoder)
-After=
 
 [Service]
 Type=simple
