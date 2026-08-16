@@ -114,7 +114,8 @@ def fetch_meta(tl: dict) -> dict:
             bd = st.get("bitDepth")
             khz = f"{int(sr) / 1000:g} kHz" if sr else ""
             bits = f"{bd}-bit" if bd else ""
-        fmt = " ".join(x for x in (codec, bits, khz) if x)
+        quality = " / ".join(x for x in (khz, bits) if x)
+        fmt = " ".join(x for x in (codec, quality) if x)
     return {
         "title": track.get("title", "?") if track is not None else "?",
         "artist": track.get("grandparentTitle", "") if track is not None else "",
@@ -216,6 +217,8 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
 
     if cover is not None:
         img.paste(cover.resize((COVER, COVER)), (8, 8))
+        d0 = ImageDraw.Draw(img)
+        d0.rectangle((7, 7, 8 + COVER, 8 + COVER), outline=(210, 210, 215), width=1)
     else:
         d.rectangle((8, 8, 8 + COVER, 8 + COVER), fill=(30, 30, 34))
         d.text((8 + COVER // 2, 8 + COVER // 2), "♪", font=F_TITLE, fill=DIM, anchor="mm")
@@ -272,9 +275,10 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
 def render_fullscreen(cover: Image.Image | None, vol: int,
                       show_vol: bool) -> Image.Image:
     img = Image.new("RGB", (W, H), (0, 0, 0))
+    d = ImageDraw.Draw(img)
     if cover is not None:
         img.paste(cover.resize((COVER_FS, COVER_FS)), (0, 0))
-    d = ImageDraw.Draw(img)
+        d.rectangle((0, 0, COVER_FS - 1, COVER_FS - 1), outline=(210, 210, 215), width=1)
     cx = COVER_FS + (W - COVER_FS) // 2  # center of right column
     d.text((cx, 20), "V O L U M E", font=F_SMALL, fill=DIM, anchor="mm")
     num = volume_db(vol)
