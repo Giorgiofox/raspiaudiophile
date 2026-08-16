@@ -9,7 +9,8 @@ Deployed and registered with plex.tv as player "RaspiAudiophile".
 
 - Host: `RaspiAudiophile`, user `giorgiofox`, IP `192.168.1.187` (Wi-Fi, DHCP —
   add a router reservation). SSH alias: `ssh caldera`
-- Caldera Music 1.0.47, user service enabled, linger on
+- Caldera Music 1.1.0-beta.1 (beta channel), user service enabled, linger on,
+  Companion watchdog timer active
 - Interim DAC: Behringer UCA202 (USB, 16-bit/48 kHz max) on
   `hw:CARD=CODEC,DEV=0`, `audio.sampleRate=48000` (Caldera resamples 96 -> 48)
 - Onboard and HDMI audio disabled in `config.txt`
