@@ -241,6 +241,7 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
         img.paste(cover.resize((COVER_FS, COVER_FS)), (0, 0))
     d = ImageDraw.Draw(img)
     cx = COVER_FS + (W - COVER_FS) // 2  # center of right column
+    d.text((cx, 20), "V O L U M E", font=F_SMALL, fill=DIM, anchor="mm")
     num = volume_db(vol)
     if num.endswith(" dB"):
         num = num[:-3]
