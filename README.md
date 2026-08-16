@@ -170,14 +170,37 @@ and auto-standby when Caldera is idle.
 
 ## Control panel (planned)
 
-- v1: EC11 rotary encoder wired to Pi GPIOs (5, 6, 13 free above the DAC HAT,
-  via stacking header) + SSD1306 128x64 OLED on I2C (address 0x3C, shares the
-  bus with the HAT's PCM5122 at 0x4C — no conflict). Both parts on hand.
-  A single Python service ("caldera-panel", luma.oled + lgpio) translates
-  encoder events to Caldera Companion HTTP calls on localhost:32500 and shows
-  track title/artist, format, play state and a volume bar with dB readout.
-  Gestures: rotate = volume, click = play/pause, double click = next track,
-  long press = previous track.
+- v1: EC11 rotary encoder + Tontec MZ61581-PI-EXT 3.5" TFT (480x320 color,
+  SPI up to 128 MHz, in-kernel fbtft overlay `mz61581`). Both on hand; the
+  SSD1306 OLED idea was dropped in its favor — the TFT can show cover art.
+  Electrically independent from the DAC HAT (SPI vs I2S/I2C); physically both
+  want the 40-pin header, so the TFT is wired with jumper leads from a
+  stacking header to the front panel instead of plugged on top.
+  A single Python service ("caldera-panel": Pillow rendering to the fbtft
+  framebuffer + lgpio for the encoder) translates encoder events to Caldera
+  Companion HTTP calls on localhost:32500 and shows cover art (320x320 via
+  Plex /photo/:/transcode), title/artist, play state and a volume overlay
+  with dB readout. Gestures: rotate = volume, click = play/pause, double
+  click = next track, long press = previous track.
+
+  v1 pin map (physical pin numbers):
+
+  | Signal | GPIO | Pin | Notes |
+  |---|---|---|---|
+  | TFT 5V | - | 2 | backlight ~100 mA |
+  | TFT GND | - | 6 | |
+  | TFT MOSI | 10 | 19 | SPI0 |
+  | TFT SCLK | 11 | 23 | SPI0 |
+  | TFT CE0 | 8 | 24 | SPI0 |
+  | TFT DC / RESET | 25 / 15 | 22 / 10 | check overlay defaults on first test |
+  | Encoder A | 5 | 29 | internal pull-up |
+  | Encoder B | 6 | 31 | internal pull-up |
+  | Encoder SW | 13 | 33 | internal pull-up |
+  | Encoder common + SW return | - | 30, 34 | GND |
+
+  Test the 2015-vintage TFT electrically before cutting its front-panel
+  opening. Spare Pi 2 boards (Ethernet only) are earmarked for future wired
+  multi-room zones, one PCM5122 HAT each; the 3B+ stays the main unit.
 - v2: detachable display remote — Waveshare ESP32-C6-LCD-1.47 (172x320 LCD,
   onboard LiPo charging) + EC11 encoder + LiPo 500-900 mAh. Magnetic 3-pin
   pogo dock on the front panel (center pin 5 V, outer pins GND so a 180-degree
