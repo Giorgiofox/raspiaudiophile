@@ -1,0 +1,10 @@
+[Unit]
+Description=Release the TFT from the kernel console so the panel owns it
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "for v in /sys/class/vtconsole/vtcon*; do grep -q \"frame buffer\" $v/name && echo 0 > $v/bind; done; true"
+
+[Install]
+WantedBy=multi-user.target

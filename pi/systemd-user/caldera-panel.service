@@ -1,0 +1,12 @@
+[Unit]
+Description=Caldera now-playing panel (TFT + encoder)
+After=caldera-music.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/caldera-panel/caldera_panel.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
