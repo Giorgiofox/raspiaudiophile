@@ -630,6 +630,8 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
 VU_BASE: Image.Image | None = None
 VU_CACHE: dict = {"arr": None, "played": -1}
 VU_VOLTXT = {"vol": None, "arr": None}
+VU_FMTTXT = {"fmt": None, "arr": None}
+VU_FMT_X = 8 + 10
 VU_TXT_W, VU_TXT_H = 170, 46
 VU_TXT_X = 404 + VU_MW - VU_TXT_W - 10
 VU_TXT_Y = VU_FACE_Y + VU_MH - VU_TXT_H - 8
@@ -655,7 +657,7 @@ def _to_xrgb(img: Image.Image) -> np.ndarray:
     return out
 
 
-def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
+def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> bytes:
     """Full-frame XRGB bytes; only the needle regions are redrawn per call."""
     global VU_BASE
     if VU_BASE is None:
@@ -691,6 +693,17 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
         VU_VOLTXT["arr"] = _to_xrgb(crop)
         VU_VOLTXT["vol"] = vol
     arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_TXT_X:VU_TXT_X + VU_TXT_W] = VU_VOLTXT["arr"]
+
+    if fmt and VU_FMTTXT["fmt"] != fmt:
+        crop = VU_BASE.crop((VU_FMT_X, VU_TXT_Y,
+                             VU_FMT_X + VU_TXT_W + 40, VU_TXT_Y + VU_TXT_H)).copy()
+        dd = ImageDraw.Draw(crop)
+        short = fmt.replace(" / 24-bit", "").replace(" / 16-bit", "")
+        dd.text((4, VU_TXT_H - 6), short, font=F_FMT, fill=(15, 12, 8), anchor="ls")
+        VU_FMTTXT["arr"] = _to_xrgb(crop)
+        VU_FMTTXT["fmt"] = fmt
+    if VU_FMTTXT["arr"] is not None:
+        arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_FMT_X:VU_FMT_X + VU_TXT_W + 40] = VU_FMTTXT["arr"]
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
@@ -908,7 +921,7 @@ def main() -> None:
                 time.sleep(0.04)
                 continue
             elif VIEW["mode"] == 2:
-                FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol))
+                FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol, meta.get("format", "")))
                 last_frame = b""
                 time.sleep(0.025)
                 continue
