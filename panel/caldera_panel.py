@@ -375,8 +375,11 @@ def vu_capture() -> None:
         return
     while True:
         try:
+            # STRICT hw params: must mirror the loop48 playback branch
+            # exactly (48k/S16/2ch) or the aloop card gets pinned wrong
+            # and every playback open dies with EINVAL.
             pcm = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL,
-                                device="plughw:CARD=Loopback,DEV=1",
+                                device="hw:CARD=Loopback,DEV=1",
                                 channels=2, rate=48000,
                                 format=alsaaudio.PCM_FORMAT_S16_LE,
                                 periodsize=1200)
