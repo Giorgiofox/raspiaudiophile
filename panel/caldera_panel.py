@@ -689,6 +689,7 @@ def timeline_poller() -> None:
 
 
 def main() -> None:
+    set_backlight(True)   # sync real state: service may restart with screen off
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
     threading.Thread(target=timeline_poller, daemon=True).start()
