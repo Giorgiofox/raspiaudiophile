@@ -699,7 +699,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
         crop = VU_BASE.crop((VU_FMT_X, VU_TXT_Y,
                              VU_FMT_X + fw, VU_TXT_Y + VU_TXT_H)).copy()
         dd = ImageDraw.Draw(crop)
-        dd.text((4, VU_TXT_H - 6), fmt, font=F_FMT, fill=(15, 12, 8), anchor="ls")
+        f_fmt_small = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
+        dd.text((4, VU_TXT_H - 8), fmt, font=f_fmt_small, fill=(15, 12, 8), anchor="ls")
         VU_FMTTXT["arr"] = _to_xrgb(crop)
         VU_FMTTXT["fmt"] = fmt
     if VU_FMTTXT["arr"] is not None:
