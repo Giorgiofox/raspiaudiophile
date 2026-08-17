@@ -786,7 +786,7 @@ def encoder_worker() -> None:
     btn.when_released = on_release
 
     while True:
-        time.sleep(0.1)
+        time.sleep(0.06)
         with lock:
             d = pending["delta"]
             pending["delta"] = 0
@@ -839,8 +839,13 @@ def main() -> None:
             paused_since = 0.0
         stale_pause = paused_since and now - paused_since > PAUSED_TO_IDLE_S
 
+        def live_vol(fallback: int) -> int:
+            if VOL_LOCAL["v"] is not None and now - VOL_LOCAL["at"] < 2.0:
+                return VOL_LOCAL["v"]      # optimistic: knob just moved
+            return fallback
+
         if tl is None or state in (None, "stopped") or "key" not in tl or stale_pause:
-            vol = int(tl.get("volume", 0)) if tl else 0
+            vol = live_vol(int(tl.get("volume", 0)) if tl else 0)
             img = render_idle(vol)
             last_key = None
             if idle_since == 0.0:
@@ -852,7 +857,7 @@ def main() -> None:
             idle_since = 0.0
             if not SCREEN["on"]:
                 set_backlight(True)       # music came back: wake the screen
-            vol = int(tl.get("volume", 0))
+            vol = live_vol(int(tl.get("volume", 0)))
             if vol != last_vol:
                 if last_vol >= 0:
                     vol_changed_at = now
