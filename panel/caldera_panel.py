@@ -728,14 +728,14 @@ def _wake_screen() -> None:
 
 
 def encoder_worker() -> None:
-    """KY-040 on GPIO 16 (CLK) / 26 (DT) / 20 (SW): volume + transport.\n\n    GPIO 5/6 are NOT free with the clone DAC+ Pro HAT: they gate the\n    onboard oscillators - driving them kills the audio clock."""
+    """KY-040 on GPIO 16 (CLK) / 26 (DT) / 13 (SW): volume + transport.\n\n    GPIO 5/6 are NOT free with the clone DAC+ Pro HAT: they gate the\n    onboard oscillators - driving them kills the audio clock."""
     try:
         from gpiozero import RotaryEncoder, Button
     except ImportError:
         return
     try:
         enc = RotaryEncoder(16, 26, max_steps=0, wrap=False)
-        btn = Button(20, pull_up=True, bounce_time=0.03, hold_time=0.8)
+        btn = Button(13, pull_up=True, bounce_time=0.03, hold_time=0.8)
     except Exception:
         return
 
