@@ -429,7 +429,7 @@ def _amber_face(w: int, h: int) -> Image.Image:
     return Image.fromarray(np.dstack([r, g_, b]))
 
 
-def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=1.0,
+def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=0.35,
                    color=(12, 20, 28), shadow=True, sh_dx=5.0, sh_dy=6.0):
     """Anti-aliased tapered needle with a soft offset lamp shadow (BGR array)."""
     h, w = arr_bgr.shape[:2]
@@ -622,7 +622,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
     tip_x = cx + FS_R_NEEDLE * math.sin(a)
     tip_y = py - FS_R_NEEDLE * math.cos(a)
     view = arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W]
-    draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.8,
+    draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.3,
                    color=(12, 20, 28), sh_dx=4.5 * math.sin(a), sh_dy=4.5)
     return arr.tobytes()
 
