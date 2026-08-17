@@ -502,6 +502,106 @@ def make_vu_base() -> Image.Image:
     return img
 
 
+FS_FACE_W, FS_FACE_H = 296, 248
+FS_FACE_X, FS_FACE_Y = 492, 36
+FS_SCALE = FS_FACE_W / 386
+FS_PIVOT_Y = int(402 * FS_SCALE)
+FS_R_ARC = int(262 * FS_SCALE)
+FS_R_NEEDLE = int(312 * FS_SCALE)
+
+
+def make_vu_face_small() -> Image.Image:
+    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 12)
+    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 32)
+    face = _amber_face(FS_FACE_W, FS_FACE_H)
+    d = ImageDraw.Draw(face)
+    cx, py = FS_FACE_W // 2, FS_PIVOT_Y
+
+    def pt(db, r):
+        a = _vu_angle(db)
+        return (cx + r * math.sin(a), py - r * math.cos(a))
+
+    pts = [pt(VU_MIN + (0 - VU_MIN) * i / 60, FS_R_ARC) for i in range(61)]
+    d.line(pts, fill=INK, width=4, joint="curve")
+    segs = 20
+    for i in range(segs):
+        t = i / segs
+        col = (int(205 + 20 * t), int(115 - 90 * t), int(25 - 10 * t))
+        a1 = _vu_angle(VU_MAX * i / segs)
+        a2 = _vu_angle(VU_MAX * (i + 1) / segs)
+        d.line((cx + FS_R_ARC * math.sin(a1), py - FS_R_ARC * math.cos(a1),
+                cx + FS_R_ARC * math.sin(a2), py - FS_R_ARC * math.cos(a2)),
+               fill=col, width=6)
+    for db in (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3):
+        if db >= 2:
+            col = (200, 30, 18)
+        elif db == 1:
+            col = (212, 122, 22)
+        else:
+            col = INK
+        x1, y1 = pt(db, FS_R_ARC)
+        x2, y2 = pt(db, FS_R_ARC + 16)
+        d.line((x1, y1, x2, y2), fill=col, width=3)
+        xl, yl = pt(db, FS_R_ARC + 24)
+        lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
+        d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
+    d.text((cx, int(FS_FACE_H * 0.78)), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
+    return face
+
+
+FS_FACE: Image.Image | None = None
+FS_CACHE: dict = {"arr": None, "key": None}
+FS_DISP = {"m": VU_MIN}
+
+
+def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
+    global FS_FACE
+    if FS_FACE is None:
+        FS_FACE = make_vu_face_small()
+    ck = (key, vol)
+    if FS_CACHE["arr"] is None or FS_CACHE["key"] != ck:
+        base = Image.new("RGB", (W, H), (0, 0, 0))
+        d = ImageDraw.Draw(base)
+        if cover is not None:
+            base.paste(cover.resize((COVER_FS, COVER_FS)), (0, 0))
+            d.rectangle((0, 0, COVER_FS - 1, COVER_FS - 1), outline=(210, 210, 215), width=1)
+        base.paste(FS_FACE, (FS_FACE_X, FS_FACE_Y))
+        d.rectangle((FS_FACE_X - 1, FS_FACE_Y - 1, FS_FACE_X + FS_FACE_W,
+                     FS_FACE_Y + FS_FACE_H), outline=(5, 5, 5), width=4)
+        ccx = FS_FACE_X + FS_FACE_W // 2
+        num = volume_db(vol)
+        if num.endswith(" dB"):
+            main, unit = num[:-3], " dB"
+        else:
+            main, unit = num, ""
+        f_num = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 68)
+        wm = d.textlength(main, font=f_num)
+        wu = d.textlength(unit, font=F_FMT) if unit else 0
+        x0 = ccx - (wm + wu) / 2
+        d.text((x0, 428), main, font=f_num, fill=FG, anchor="ls")
+        if unit:
+            d.text((x0 + wm, 428), unit, font=F_FMT, fill=DIM, anchor="ls")
+        FS_CACHE["arr"] = _to_xrgb(base)
+        FS_CACHE["key"] = ck
+    arr = FS_CACHE["arr"].copy()
+
+    now = time.monotonic()
+    dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
+    atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+    target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
+    FS_DISP["m"] += (max(VU_MIN, min(VU_MAX, target)) - FS_DISP["m"]) * min(1.0, dt / 0.05)
+    a = _vu_angle(FS_DISP["m"])
+    region = FS_FACE.copy()
+    d = ImageDraw.Draw(region)
+    cx, py = FS_FACE_W // 2, FS_PIVOT_Y
+    tip_x = cx + FS_R_NEEDLE * math.sin(a)
+    tip_y = py - FS_R_NEEDLE * math.cos(a)
+    d.line((cx + 1, py, tip_x + 1, tip_y + 1), fill=(185, 140, 70), width=2)
+    d.line((cx, py, tip_x, tip_y), fill=(28, 20, 12), width=3)
+    arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W] = _to_xrgb(region)
+    return arr.tobytes()
+
+
 VU_BASE: Image.Image | None = None
 VU_CACHE: dict = {"arr": None, "played": -1}
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
@@ -644,8 +744,10 @@ def main() -> None:
             if state == "playing":
                 t_ms += int((now - tl_at) * 1000)  # interpolate between polls
             if VIEW["mode"] == 1:
-                show_vol = now - vol_changed_at < 2.5
-                img = render_fullscreen(cover, vol, show_vol)
+                FB.write_bytes(render_fullscreen_fb(cover, vol, last_key))
+                last_frame = b""
+                time.sleep(0.04)
+                continue
             elif VIEW["mode"] == 2:
                 FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol))
                 last_frame = b""
