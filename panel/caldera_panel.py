@@ -31,6 +31,17 @@ TIMELINE_URL = "http://localhost:32500/player/timeline/poll?wait=0&commandID=1"
 PREFS = Path.home() / ".config/caldera-music/preferences.json"
 POLL_S = 1.0
 PAUSED_TO_IDLE_S = 600  # after 10 min paused, show the idle screen
+SCREEN_OFF_S = 180      # idle this long -> backlight off; touch/play wakes
+BL_POWER = Path("/sys/class/backlight/rpi_backlight/bl_power")
+SCREEN = {"on": True}
+
+
+def set_backlight(on: bool) -> None:
+    try:
+        BL_POWER.write_text("0" if on else "1")
+        SCREEN["on"] = on
+    except OSError:
+        pass
 
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 F_TITLE = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 36)
@@ -253,7 +264,10 @@ def touch_listener() -> None:
         if ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH and ev.value == 1:
             now = time.monotonic()
             if now - last > 0.4:  # debounce
-                VIEW["mode"] = (VIEW["mode"] + 1) % 3
+                if not SCREEN["on"]:
+                    set_backlight(True)   # wake only, keep the current view
+                else:
+                    VIEW["mode"] = (VIEW["mode"] + 1) % 3
                 last = now
 
 
@@ -585,6 +599,7 @@ def main() -> None:
     last_vol = -1
     vol_changed_at = 0.0
     paused_since = 0.0
+    idle_since = 0.0
     while True:
         now = time.monotonic()
         tl = TL_SHARED["tl"]
@@ -602,7 +617,14 @@ def main() -> None:
             vol = int(tl.get("volume", 0)) if tl else 0
             img = render_idle(vol)
             last_key = None
+            if idle_since == 0.0:
+                idle_since = now
+            elif SCREEN["on"] and now - idle_since > SCREEN_OFF_S:
+                set_backlight(False)
         else:
+            idle_since = 0.0
+            if not SCREEN["on"]:
+                set_backlight(True)       # music came back: wake the screen
             vol = int(tl.get("volume", 0))
             if vol != last_vol:
                 if last_vol >= 0:
