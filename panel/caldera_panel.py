@@ -88,15 +88,29 @@ FALLBACK_SERVER = "http://192.168.1.250:32400"
 
 
 def server_base(tl: dict) -> str:
-    if tl.get("address") and tl.get("port"):
-        return f"{tl.get('protocol', 'http')}://{tl['address']}:{tl['port']}"
+    # prefer the LAN server: timeline sometimes advertises the remote
+    # plex.direct route, unreachable from inside the network (hairpin NAT)
     return FALLBACK_SERVER
 
 
+def server_base_alt(tl: dict) -> str | None:
+    if tl.get("address") and tl.get("port"):
+        return f"{tl.get('protocol', 'http')}://{tl['address']}:{tl['port']}"
+    return None
+
+
 def fetch_meta(tl: dict) -> dict:
-    url = f"{server_base(tl)}{tl['key']}"
-    r = requests.get(url, params={"X-Plex-Token": token()}, timeout=5)
-    r.raise_for_status()
+    try:
+        r = requests.get(f"{server_base(tl)}{tl['key']}",
+                         params={"X-Plex-Token": token()}, timeout=4)
+        r.raise_for_status()
+    except requests.RequestException:
+        alt = server_base_alt(tl)
+        if not alt:
+            raise
+        r = requests.get(f"{alt}{tl['key']}",
+                         params={"X-Plex-Token": token()}, timeout=6)
+        r.raise_for_status()
     track = ET.fromstring(r.text).find("Track")
     media = track.find("Media") if track is not None else None
     part = media.find("Part") if media is not None else None
