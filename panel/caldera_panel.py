@@ -534,9 +534,9 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
 def render_idle(vol: int) -> Image.Image:
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
-    d.text((W // 2, H // 2 - 30), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
-    d.text((W // 2, H // 2 + 10), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
-    d.text((W // 2, H // 2 + 60), "waiting for Plexamp…", font=F_SMALL, fill=DIM, anchor="mm")
+    d.text((W // 2, 150), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
+    d.text((W // 2, 255), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
+    d.text((W // 2, 355), "waiting for Plexamp…", font=F_SMALL, fill=DIM, anchor="mm")
     return img
 
 
