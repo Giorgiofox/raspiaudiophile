@@ -59,4 +59,4 @@ dtoverlay=disable-bt
 disable_splash=1
 boot_delay=0
 initial_turbo=60
-dtoverlay=caldera-tft,rotate=270,speed=32000000
+#dtoverlay=caldera-tft,rotate=270,speed=32000000
