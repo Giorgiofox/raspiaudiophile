@@ -499,7 +499,7 @@ def make_vu_base() -> Image.Image:
             d.line((x1, y1, x2, y2), fill=col, width=5 * SS)
             xl, yl = pt(db, VU_R_ARC + 42)
             lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
-            d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
+            d.text((xl, yl), lbl, font=f_lab, fill=col, anchor="ms")
 
         def minors_between(a, b, n):
             for i in range(1, n):
@@ -571,7 +571,7 @@ def make_vu_face_small() -> Image.Image:
         d.line((x1, y1, x2, y2), fill=col, width=3 * SS)
         xl, yl = pt(db, FS_R_ARC + 24)
         lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
-        d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
+        d.text((xl, yl), lbl, font=f_lab, fill=col, anchor="ms")
     d.text((cx, int(FS_FACE_H * 0.78) * SS), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
     return face.resize((FS_FACE_W, FS_FACE_H), Image.LANCZOS)
 
