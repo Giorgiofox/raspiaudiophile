@@ -16,40 +16,30 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import math
 import threading
 
 import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-def find_fb() -> Path:
-    """The TFT's fb index moves between boots; find it by driver name."""
-    for p in Path("/sys/class/graphics").glob("fb*"):
-        try:
-            if (p / "name").read_text().strip() == "fb_ili9481":
-                return Path("/dev") / p.name
-        except OSError:
-            continue
-    raise SystemExit("TFT framebuffer (fb_ili9481) not found")
-
-
-FB = find_fb()
-W, H = 480, 320
-COVER = 176      # info view, top-left square
-COVER_FS = 320   # fullscreen view
+FB = Path("/dev/fb0")   # official 7" DSI display, driven by the firmware
+W, H = 800, 480
+COVER = 340      # info view, top-left square
+COVER_FS = 480   # fullscreen view
 TIMELINE_URL = "http://localhost:32500/player/timeline/poll?wait=0&commandID=1"
 PREFS = Path.home() / ".config/caldera-music/preferences.json"
 POLL_S = 1.0
 PAUSED_TO_IDLE_S = 600  # after 10 min paused, show the idle screen
 
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
-F_TITLE = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
-F_TEXT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 18)
-F_SMALL = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 14)
-F_DB = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 54)
-F_FMT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 21)
-F_DBFS = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 68)
-F_DBFS_DEC = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 30)
+F_TITLE = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 36)
+F_TEXT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 28)
+F_SMALL = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 20)
+F_DB = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 64)
+F_FMT = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 32)
+F_DBFS = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 104)
+F_DBFS_DEC = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 46)
 
 BG = (12, 12, 14)
 FG = (235, 235, 235)
@@ -72,10 +62,14 @@ def volume_db(vol: int) -> str:
 
 
 def fb_write(img: Image.Image) -> None:
-    arr = np.asarray(img.convert("RGB"), dtype=np.uint16)
-    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-    FB.write_bytes(rgb565.astype("<u2").tobytes())
+    # firmware fb is 32bpp XRGB little-endian: byte order B,G,R,X
+    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    out = np.empty((H, W, 4), dtype=np.uint8)
+    out[..., 0] = arr[..., 2]
+    out[..., 1] = arr[..., 1]
+    out[..., 2] = arr[..., 0]
+    out[..., 3] = 255
+    FB.write_bytes(out.tobytes())
 
 
 def timeline() -> dict | None:
@@ -94,7 +88,7 @@ FALLBACK_SERVER = "http://192.168.1.250:32400"
 
 
 def server_base(tl: dict) -> str:
-    if "address" in tl and "port" in tl:
+    if tl.get("address") and tl.get("port"):
         return f"{tl.get('protocol', 'http')}://{tl['address']}:{tl['port']}"
     return FALLBACK_SERVER
 
@@ -151,17 +145,50 @@ def fetch_cover(tl: dict, thumb: str) -> Image.Image | None:
         return None
 
 
-def fetch_levels(tl: dict, stream_id: str | None) -> list[float] | None:
-    """Whole-track loudness envelope (dB) from the Plex sonic analysis."""
+WAVE_COLS = W - 32
+
+
+def fetch_levels(tl: dict, stream_id: str | None):
+    """Per-pixel waveform amplitude, precomputed once per track."""
     if not stream_id:
         return None
     url = f"{server_base(tl)}/library/streams/{stream_id}/levels"
     try:
         r = requests.get(url, params={"X-Plex-Token": token()}, timeout=8)
         r.raise_for_status()
-        return [float(lv.get("v", "-60")) for lv in ET.fromstring(r.text)]
+        lv = np.array([float(x.get("v", "-60")) for x in ET.fromstring(r.text)])
     except (requests.RequestException, ET.ParseError, ValueError):
         return None
+    if lv.size < 2:
+        return None
+    lin = np.power(10.0, lv / 20.0)
+    edges = np.linspace(0, len(lin), WAVE_COLS + 1).astype(int)
+    amp = np.array([lin[a:b].mean() if b > a else lin[min(a, len(lin) - 1)]
+                    for a, b in zip(edges[:-1], edges[1:])])
+    lo, hi = np.percentile(amp, 8), np.percentile(amp, 99)
+    amp = np.clip((amp - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+    amp = np.power(amp, 1.6)  # gamma: quiet parts stay visibly small
+    amp = np.clip(amp, 0.012, 1.0)
+    amp = np.convolve(amp, np.ones(3) / 3, mode="same")
+    return prerender_wave(amp)
+
+
+WAVE_H_HALF = 32
+
+
+def prerender_wave(amp: np.ndarray) -> dict:
+    """Two ready strips (played/unplayed); per-frame drawing = two pastes."""
+    h = WAVE_H_HALF * 2 + 1
+    strips = {}
+    for key, color in (("on", ACCENT), ("off", (95, 95, 104))):
+        im = Image.new("RGB", (WAVE_COLS, h), BG)
+        dd = ImageDraw.Draw(im)
+        dd.line((0, WAVE_H_HALF, WAVE_COLS - 1, WAVE_H_HALF), fill=(95, 95, 104))
+        hs = np.maximum(1, (WAVE_H_HALF * amp).astype(int))
+        for i in range(WAVE_COLS):
+            dd.line((i, WAVE_H_HALF - hs[i], i, WAVE_H_HALF + hs[i]), fill=color)
+        strips[key] = im
+    return strips
 
 
 def ellipsize(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
@@ -191,7 +218,7 @@ def wrap2(draw, text, font, max_w):
     return lines
 
 
-VIEW = {"fullscreen": False}
+VIEW = {"mode": 0}  # 0 info, 1 fullscreen cover, 2 VU meters
 
 
 def touch_listener() -> None:
@@ -202,7 +229,7 @@ def touch_listener() -> None:
     dev = None
     for path in evdev.list_devices():
         d = evdev.InputDevice(path)
-        if "ADS7846" in d.name:
+        if "ADS7846" in d.name or "raspberrypi-ts" in d.name:
             dev = d
             break
     if dev is None:
@@ -212,7 +239,7 @@ def touch_listener() -> None:
         if ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH and ev.value == 1:
             now = time.monotonic()
             if now - last > 0.4:  # debounce
-                VIEW["fullscreen"] = not VIEW["fullscreen"]
+                VIEW["mode"] = (VIEW["mode"] + 1) % 3
                 last = now
 
 
@@ -222,63 +249,52 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
     d = ImageDraw.Draw(img)
 
     if cover is not None:
-        img.paste(cover.resize((COVER, COVER)), (8, 8))
-        d0 = ImageDraw.Draw(img)
-        d0.rectangle((7, 7, 8 + COVER, 8 + COVER), outline=(210, 210, 215), width=1)
+        img.paste(cover.resize((COVER, COVER)), (16, 16))
+        d.rectangle((15, 15, 16 + COVER, 16 + COVER), outline=(210, 210, 215), width=1)
     else:
-        d.rectangle((8, 8, 8 + COVER, 8 + COVER), fill=(30, 30, 34))
-        d.text((8 + COVER // 2, 8 + COVER // 2), "♪", font=F_TITLE, fill=DIM, anchor="mm")
+        d.rectangle((16, 16, 16 + COVER, 16 + COVER), fill=(30, 30, 34))
+        d.text((16 + COVER // 2, 16 + COVER // 2), "♪", font=F_TITLE, fill=DIM, anchor="mm")
 
-    x = COVER + 24
-    col_w = W - x - 8
+    x = COVER + 40
+    col_w = W - x - 16
 
-    y = 10
+    y = 20
     for line in wrap2(d, meta["title"], F_TITLE, col_w):
         d.text((x, y), line, font=F_TITLE, fill=FG)
-        y += 28
-    d.text((x, y + 6), ellipsize(d, meta["artist"], F_TEXT, col_w), font=F_TEXT, fill=FG)
-    d.text((x, y + 32), ellipsize(d, meta["album"], F_TEXT, col_w), font=F_TEXT, fill=DIM)
-    d.text((x, y + 64), meta["format"], font=F_FMT, fill=(120, 200, 255))
+        y += 44
+    d.text((x, y + 10), ellipsize(d, meta["artist"], F_TEXT, col_w), font=F_TEXT, fill=FG)
+    d.text((x, y + 50), ellipsize(d, meta["album"], F_TEXT, col_w), font=F_TEXT, fill=DIM)
+    d.text((x, y + 98), ellipsize(d, meta["format"], F_FMT, col_w), font=F_FMT, fill=(120, 200, 255))
     icon = {"playing": "▶", "paused": "⏸"}.get(state, "⏹")
-    d.text((x, y + 96), f"{icon} {state}", font=F_TEXT, fill=ACCENT)
+    d.text((x, y + 140), f"{icon} {state}", font=F_SMALL, fill=ACCENT)
 
-    # bottom strip: waveform seekbar (loudness envelope), full width
-    if dur_ms > 0:
-        yc, half_max = 224, 26
-        x0, x1 = 8, W - 8
-        cols = x1 - x0
-        frac = min(t_ms / dur_ms, 1.0)
-        if levels:
-            lv = np.array(levels, dtype=float)
-            lin = np.power(10.0, lv / 20.0)  # dB -> linear amplitude, like Plexamp
-            edges = np.linspace(0, len(lin), cols + 1).astype(int)
-            amp = np.array([lin[a:b].mean() if b > a else lin[min(a, len(lin) - 1)]
-                            for a, b in zip(edges[:-1], edges[1:])])
-            amp = np.clip(amp / max(np.percentile(amp, 99), 1e-9), 0.015, 1.0)
-            k = np.ones(3) / 3
-            amp = np.convolve(amp, k, mode="same")
-            played = int(cols * frac)
-            d.line((x0, yc, x1, yc), fill=(95, 95, 104))  # baseline: full extent
-            for i in range(cols):
-                h = max(1, int(half_max * amp[i]))
-                c = ACCENT if i <= played else (95, 95, 104)
-                d.line((x0 + i, yc - h, x0 + i, yc + h), fill=c)
-        else:
-            d.rectangle((x0, yc - 2, x1, yc + 2), fill=(50, 50, 55))
-            d.rectangle((x0, yc - 2, x0 + int(cols * frac), yc + 2), fill=ACCENT)
-        mins = lambda ms: f"{ms // 60000}:{ms % 60000 // 1000:02d}"
-        d.text((x0, yc + half_max + 4), mins(t_ms), font=F_SMALL, fill=DIM)
-        d.text((x1, yc + half_max + 4), mins(dur_ms), font=F_SMALL, fill=DIM, anchor="ra")
-
-    # volume: big dB right, bar filling the space left of it
+    # volume row: sits between the text block and the waveform, no overlap
     num = volume_db(vol)
+    d.text((W - 16, 352), num, font=F_DB, fill=FG, anchor="rs")
     tw = d.textlength(num, font=F_DB)
-    d.text((W - 8, H - 10), num, font=F_DB, fill=FG, anchor="rs")
-    bx1 = int(W - 8 - tw - 26)          # fixed gap from the number
-    yc = H - 10 - 15                    # aligned with the minus-sign height
-    if bx1 > 60:
-        d.rectangle((8, yc - 5, bx1, yc + 5), fill=(50, 50, 55))
-        d.rectangle((8, yc - 5, 8 + int((bx1 - 8) * vol / 100), yc + 5), fill=ACCENT)
+    bx1 = int(W - 16 - tw - 34)
+    yc = 352 - 26
+    if bx1 > x + 40:
+        d.rectangle((x, yc - 7, bx1, yc + 7), fill=(50, 50, 55))
+        d.rectangle((x, yc - 7, x + int((bx1 - x) * vol / 100), yc + 7), fill=ACCENT)
+
+    # waveform seekbar: two pastes from the prerendered strips
+    if dur_ms > 0:
+        yc2, half_max = 440, WAVE_H_HALF
+        x0 = 16
+        cols = WAVE_COLS
+        frac = min(t_ms / dur_ms, 1.0)
+        played = max(1, int(cols * frac))
+        if levels is not None:
+            img.paste(levels["off"], (x0, yc2 - half_max))
+            img.paste(levels["on"].crop((0, 0, played, half_max * 2 + 1)),
+                      (x0, yc2 - half_max))
+        else:
+            d.rectangle((x0, yc2 - 3, x0 + cols, yc2 + 3), fill=(50, 50, 55))
+            d.rectangle((x0, yc2 - 3, x0 + played, yc2 + 3), fill=ACCENT)
+        mins = lambda ms: f"{ms // 60000}:{ms % 60000 // 1000:02d}"
+        d.text((x0, yc2 - half_max - 24), mins(t_ms), font=F_SMALL, fill=DIM)
+        d.text((x0 + cols, yc2 - half_max - 24), mins(dur_ms), font=F_SMALL, fill=DIM, anchor="ra")
     return img
 
 
@@ -289,8 +305,8 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
     if cover is not None:
         img.paste(cover.resize((COVER_FS, COVER_FS)), (0, 0))
         d.rectangle((0, 0, COVER_FS - 1, COVER_FS - 1), outline=(210, 210, 215), width=1)
-    cx = COVER_FS + (W - COVER_FS) // 2  # center of right column
-    d.text((cx, 20), "V O L U M E", font=F_SMALL, fill=DIM, anchor="mm")
+    cx = COVER_FS + (W - COVER_FS) // 2
+    d.text((cx, 40), "V O L U M E", font=F_SMALL, fill=DIM, anchor="mm")
     num = volume_db(vol)
     if num.endswith(" dB"):
         num = num[:-3]
@@ -299,17 +315,203 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
         wi = d.textlength(ip, font=F_DBFS)
         wd = d.textlength("." + dec, font=F_DBFS_DEC)
         x0 = cx - (wi + wd) / 2
-        d.text((x0, 92), ip, font=F_DBFS, fill=FG, anchor="ls")
-        d.text((x0 + wi, 92), "." + dec, font=F_DBFS_DEC, fill=FG, anchor="ls")
+        d.text((x0, 150), ip, font=F_DBFS, fill=FG, anchor="ls")
+        d.text((x0 + wi, 150), "." + dec, font=F_DBFS_DEC, fill=FG, anchor="ls")
     else:
-        d.text((cx, 66), num, font=F_DBFS, fill=FG, anchor="mm")
-    d.text((cx, 124), "dB", font=F_DBFS_DEC, fill=FG, anchor="mm")
-    # vertical volume bar, fills bottom-up
-    bx0, bx1, by0, by1 = cx - 14, cx + 14, 150, 305
+        d.text((cx, 110), num, font=F_DBFS, fill=FG, anchor="mm")
+    d.text((cx, 200), "dB", font=F_DBFS_DEC, fill=FG, anchor="mm")
+    bx0, bx1, by0, by1 = cx - 22, cx + 22, 250, 450
     d.rectangle((bx0, by0, bx1, by1), fill=(40, 40, 45))
     top = by1 - int((by1 - by0) * vol / 100)
     d.rectangle((bx0, top, bx1, by1), fill=ACCENT)
     return img
+
+
+VU_MIN, VU_MAX = -20.0, 3.0
+VU_REF_DBFS = -8.0   # 0 VU reference (calibrated by ear on quiet tracks)
+VU_LEVELS = {"l": -60.0, "r": -60.0}
+
+
+def vu_capture() -> None:
+    try:
+        import alsaaudio
+    except ImportError:
+        return
+    while True:
+        try:
+            pcm = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL,
+                                device="plughw:CARD=Loopback,DEV=1",
+                                channels=2, rate=48000,
+                                format=alsaaudio.PCM_FORMAT_S16_LE,
+                                periodsize=1200)
+            while True:
+                n, data = pcm.read()
+                if n <= 0:
+                    time.sleep(0.02)
+                    continue
+                a = np.frombuffer(data, dtype=np.int16).reshape(-1, 2).astype(np.float64)
+                blk = a.shape[0] / 48000.0
+                alpha = min(1.0, blk / 0.065)  # VU: 99% in 300 ms -> tau 65 ms
+                for i, ch in enumerate(("l", "r")):
+                    rms = np.sqrt(np.mean(a[:, i] ** 2))
+                    db = 20 * math.log10(max(rms, 1.0) / 32768.0)
+                    VU_LEVELS[ch] += (db - VU_LEVELS[ch]) * alpha
+        except Exception:
+            VU_LEVELS["l"] = VU_LEVELS["r"] = -60.0
+            time.sleep(2)
+
+
+VU_ANCHORS = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
+_ANCHOR_POS = np.linspace(0.0, 1.0, len(VU_ANCHORS))
+
+
+def _vu_angle(db_vu: float) -> float:
+    db = max(VU_MIN, min(VU_MAX, db_vu))
+    f = float(np.interp(db, VU_ANCHORS, _ANCHOR_POS))  # even tick spacing
+    return math.radians(-35 + f * 70)
+
+
+VU_MW, VU_MH = 386, 386          # face size
+VU_FACE_Y = 8
+VU_PIVOT_Y = 402                 # pivot below the face bottom (hidden)
+VU_R_ARC = 262                   # main scale arc radius
+VU_R_NEEDLE = 312
+INK = (30, 22, 12)
+RED = (200, 30, 15)
+
+
+def _amber_face(w: int, h: int) -> Image.Image:
+    """Warm amber top fading to pale cream, with a soft center glow."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    # tungsten-lamp glow: bright warm pool upper-center, deep amber corners
+    g1 = np.exp(-(((xx - w / 2) / (w * 0.46)) ** 2 + ((yy - h * 0.30) / (h * 0.42)) ** 2))
+    g2 = np.exp(-(((xx - w / 2) / (w * 0.95)) ** 2 + ((yy - h * 0.85) / (h * 0.8)) ** 2)) * 0.35
+    glow = np.clip(g1 + g2, 0, 1)
+    r = np.clip(196 + 60 * glow, 0, 255).astype(np.uint8)
+    g_ = np.clip(122 + 106 * glow, 0, 255).astype(np.uint8)
+    b = np.clip(28 + 132 * glow, 0, 255).astype(np.uint8)
+    return Image.fromarray(np.dstack([r, g_, b]))
+
+
+def make_vu_base() -> Image.Image:
+    img = Image.new("RGB", (W, H), (10, 9, 8))
+    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 17)
+    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 52)
+    f_ch = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 17)
+    for mx, name in ((8, "LEFT"), (406, "RIGHT")):
+        face = _amber_face(VU_MW, VU_MH)
+        d = ImageDraw.Draw(face)
+        cx, py = VU_MW // 2, VU_PIVOT_Y
+
+        def pt(db, r):
+            a = _vu_angle(db)
+            return (cx + r * math.sin(a), py - r * math.cos(a))
+
+        # main arc: black then red, thick
+        pts = [pt(VU_MIN + (0 - VU_MIN) * i / 60, VU_R_ARC) for i in range(61)]
+        d.line(pts, fill=INK, width=6, joint="curve")
+        segs = 24
+        for i in range(segs):
+            t = i / segs
+            col = (int(205 + 20 * t), int(115 - 90 * t), int(25 - 10 * t))
+            a1 = _vu_angle(VU_MAX * i / segs)
+            a2 = _vu_angle(VU_MAX * (i + 1) / segs)
+            d.line((cx + VU_R_ARC * math.sin(a1), py - VU_R_ARC * math.cos(a1),
+                    cx + VU_R_ARC * math.sin(a2), py - VU_R_ARC * math.cos(a2)),
+                   fill=col, width=9)
+        # end hooks, downward
+        for db, col, wd in ((VU_MIN, INK, 6), (VU_MAX, (208, 30, 18), 9)):
+            x1, y1 = pt(db, VU_R_ARC)
+            x2, y2 = pt(db, VU_R_ARC - 34)
+            d.line((x1, y1, x2, y2), fill=col, width=wd)
+
+        majors = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
+        for db in majors:
+            col = INK
+            x1, y1 = pt(db, VU_R_ARC)
+            x2, y2 = pt(db, VU_R_ARC + 24)
+            d.line((x1, y1, x2, y2), fill=col, width=5)
+            xl, yl = pt(db, VU_R_ARC + 42)
+            lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
+            d.text((xl, yl), lbl, font=f_lab, fill=col, anchor="ms")
+
+        # minor ticks: thin, inward (below the arc)
+        def minors_between(a, b, n):
+            for i in range(1, n):
+                yield a + (b - a) * i / n
+        pairs = list(zip(majors[:-1], majors[1:]))
+        for a0, b0 in pairs:
+            for db in minors_between(a0, b0, 4):
+                col = (205, 60, 20) if db > 0 else (55, 44, 32)
+                x1, y1 = pt(db, VU_R_ARC - 5)
+                x2, y2 = pt(db, VU_R_ARC - 30)
+                d.line((x1, y1, x2, y2), fill=col, width=1)
+
+        d.text((cx, 310), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
+        d.text((VU_MW - 22, 22), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
+
+        img.paste(face, (mx, VU_FACE_Y))
+        dd = ImageDraw.Draw(img)
+        dd.rectangle((mx - 1, VU_FACE_Y - 1, mx + VU_MW + 1, VU_FACE_Y + VU_MH + 1),
+                     outline=(5, 5, 5), width=6)
+    return img
+
+
+VU_BASE: Image.Image | None = None
+VU_CACHE: dict = {"arr": None, "played": -1}
+VU_DISP = {"l": VU_MIN, "r": VU_MIN}
+_VU_LAST_T = {"t": 0.0}
+VU_REG_Y0, VU_REG_Y1 = VU_FACE_Y, VU_FACE_Y + VU_MH   # needle sweep = whole face
+
+
+def _to_xrgb(img: Image.Image) -> np.ndarray:
+    a = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    out = np.empty((a.shape[0], a.shape[1], 4), dtype=np.uint8)
+    out[..., 0] = a[..., 2]
+    out[..., 1] = a[..., 1]
+    out[..., 2] = a[..., 0]
+    out[..., 3] = 255
+    return out
+
+
+def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
+    """Full-frame XRGB bytes; only the needle regions are redrawn per call."""
+    global VU_BASE
+    if VU_BASE is None:
+        VU_BASE = make_vu_base()
+    # rebuild the composed base only when the waveform progress advances
+    played = 0
+    if dur_ms > 0 and levels is not None:
+        played = max(1, int(WAVE_COLS * min(t_ms / dur_ms, 1.0)))
+    if VU_CACHE["arr"] is None or abs(played - VU_CACHE["played"]) >= 3:
+        base = VU_BASE.copy()
+        if levels is not None:
+            yc2, hm = 445, 28
+            base.paste(levels["off"].resize((WAVE_COLS, hm * 2 + 1)), (16, yc2 - hm))
+            on = levels["on"].resize((WAVE_COLS, hm * 2 + 1))
+            base.paste(on.crop((0, 0, played, hm * 2 + 1)), (16, yc2 - hm))
+        VU_CACHE["arr"] = _to_xrgb(base)
+        VU_CACHE["played"] = played
+    arr = VU_CACHE["arr"].copy()
+
+    now = time.monotonic()
+    dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
+    _VU_LAST_T["t"] = now
+    for mx, ch in ((8, "l"), (404, "r")):
+        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        target = VU_LEVELS[ch] - VU_REF_DBFS + atten
+        VU_DISP[ch] += (max(VU_MIN, min(VU_MAX, target)) - VU_DISP[ch]) * min(1.0, dt / 0.05)
+        a = _vu_angle(VU_DISP[ch])
+        region = VU_BASE.crop((mx, VU_REG_Y0, mx + VU_MW, VU_REG_Y1))
+        d = ImageDraw.Draw(region)
+        cx = VU_MW // 2
+        py = VU_PIVOT_Y
+        tip_x = cx + VU_R_NEEDLE * math.sin(a)
+        tip_y = py - VU_R_NEEDLE * math.cos(a)
+        d.line((cx + 2, py, tip_x + 2, tip_y + 1), fill=(185, 140, 70), width=2)
+        d.line((cx, py, tip_x, tip_y), fill=(28, 20, 12), width=3)
+        arr[VU_REG_Y0:VU_REG_Y1, mx:mx + VU_MW] = _to_xrgb(region)
+    return arr.tobytes()
 
 
 def render_idle(vol: int) -> Image.Image:
@@ -323,24 +525,35 @@ def render_idle(vol: int) -> Image.Image:
 
 def main() -> None:
     threading.Thread(target=touch_listener, daemon=True).start()
+    threading.Thread(target=vu_capture, daemon=True).start()
     last_key = None
     meta: dict = {}
     cover: Image.Image | None = None
-    levels: list[float] | None = None
+    levels = None
     last_frame = b""
     last_vol = -1
     vol_changed_at = 0.0
     paused_since = 0.0
+    tl: dict | None = None
+    tl_at = 0.0
+    last_poll = 0.0
 
     while True:
-        tl = timeline()
+        now = time.monotonic()
+        if now - last_poll >= 1.0:
+            fresh = timeline()
+            if fresh is not None:
+                tl, tl_at = fresh, now
+            last_poll = now
+
         state = tl.get("state") if tl else None
         if state == "paused":
             if paused_since == 0.0:
-                paused_since = time.monotonic()
+                paused_since = now
         else:
             paused_since = 0.0
-        stale_pause = paused_since and time.monotonic() - paused_since > PAUSED_TO_IDLE_S
+        stale_pause = paused_since and now - paused_since > PAUSED_TO_IDLE_S
+
         if tl is None or state in (None, "stopped") or "key" not in tl or stale_pause:
             vol = int(tl.get("volume", 0)) if tl else 0
             img = render_idle(vol)
@@ -349,7 +562,7 @@ def main() -> None:
             vol = int(tl.get("volume", 0))
             if vol != last_vol:
                 if last_vol >= 0:
-                    vol_changed_at = time.monotonic()
+                    vol_changed_at = now
                 last_vol = vol
             key = tl.get("ratingKey")
             if key != last_key:
@@ -361,19 +574,26 @@ def main() -> None:
                 except (requests.RequestException, ET.ParseError):
                     meta, cover, levels = {"title": "?", "artist": "", "album": "",
                                            "thumb": "", "format": ""}, None, None
-            if VIEW["fullscreen"]:
-                show_vol = time.monotonic() - vol_changed_at < 2.5
+            t_ms = int(tl.get("time", 0))
+            if state == "playing":
+                t_ms += int((now - tl_at) * 1000)  # interpolate between polls
+            if VIEW["mode"] == 1:
+                show_vol = now - vol_changed_at < 2.5
                 img = render_fullscreen(cover, vol, show_vol)
+            elif VIEW["mode"] == 2:
+                FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol))
+                last_frame = b""
+                time.sleep(0.025)
+                continue
             else:
-                img = render(tl.get("state", "?"), vol, meta, cover,
-                             int(tl.get("time", 0)), int(tl.get("duration", 0)),
-                             levels)
+                img = render(state or "?", vol, meta, cover,
+                             t_ms, int(tl.get("duration", 0)), levels)
 
         frame = img.tobytes()
-        if frame != last_frame:  # skip identical frames, spare the SPI bus
+        if frame != last_frame:
             fb_write(img)
             last_frame = frame
-        time.sleep(0.15 if VIEW["fullscreen"] else POLL_S)
+        time.sleep(0.2)
 
 
 if __name__ == "__main__":
