@@ -430,28 +430,33 @@ def _amber_face(w: int, h: int) -> Image.Image:
 
 
 def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=1.0,
-                   color=(12, 20, 28), shadow=None):
-    """Anti-aliased tapered needle blended straight into a BGR(X) array."""
+                   color=(12, 20, 28), shadow=True):
+    """Anti-aliased tapered needle with a soft offset lamp shadow (BGR array)."""
     h, w = arr_bgr.shape[:2]
-    x0 = max(0, int(min(cx, tip_x)) - 5); x1 = min(w, int(max(cx, tip_x)) + 6)
-    y0 = max(0, int(min(py, tip_y)) - 5); y1 = min(h, int(max(py, tip_y)) + 6)
+    x0 = max(0, int(min(cx, tip_x)) - 12); x1 = min(w, int(max(cx, tip_x)) + 13)
+    y0 = max(0, int(min(py, tip_y)) - 12); y1 = min(h, int(max(py, tip_y)) + 14)
     if x1 <= x0 or y1 <= y0:
         return
     yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
     dx, dy = tip_x - cx, tip_y - py
     L2 = float(dx * dx + dy * dy) or 1.0
     t = np.clip(((xx - cx) * dx + (yy - py) * dy) / L2, 0.0, 1.0)
-    dist = np.hypot(xx - (cx + t * dx), yy - (py + t * dy))
+    px = cx + t * dx
+    pyl = py + t * dy
     width = w0 + (w1 - w0) * t
-    if shadow is not None:
-        a = np.clip(width + 0.8 - np.hypot(xx - (cx + t * dx) - 2.0,
-                                           yy - (py + t * dy) - 2.0), 0, 1)[..., None] * 0.45
-        sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
-        arr_bgr[y0:y1, x0:x1, :3] = (sub * (1 - a) + np.array(shadow, np.float32) * a).astype(np.uint8)
-    a = np.clip(width + 0.6 - dist, 0.0, 1.0)[..., None]
     sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
-    arr_bgr[y0:y1, x0:x1, :3] = (sub * (1 - a) + np.array(color, np.float32) * a).astype(np.uint8)
-
+    if shadow:
+        # distance from the pixel to the SHIFTED needle line (true cast shadow)
+        xs, ys = xx - 5.0, yy - 6.0
+        t2 = np.clip(((xs - cx) * dx + (ys - py) * dy) / L2, 0.0, 1.0)
+        dist_sh = np.hypot(xs - (cx + t2 * dx), ys - (py + t2 * dy))
+        w_sh = w0 + (w1 - w0) * t2
+        a_sh = np.clip((w_sh + 3.0 - dist_sh) / 3.0, 0.0, 1.0)[..., None] * 0.55
+        sub = sub * (1.0 - a_sh * 0.62)
+    dist = np.hypot(xx - px, yy - pyl)
+    a = np.clip((width + 1.1 - dist) / 1.1, 0.0, 1.0)[..., None]
+    sub = sub * (1 - a) + np.array(color, np.float32) * a
+    arr_bgr[y0:y1, x0:x1, :3] = sub.astype(np.uint8)
 
 SS = 3  # supersampling factor for static faces
 
@@ -514,7 +519,7 @@ def make_vu_base() -> Image.Image:
             x1, y1 = pt(db, VU_R_ARC + 26)
             x2, y2 = pt(db, VU_R_ARC - 60)
             d.line((x1, y1, x2, y2), fill=col, width=2 * SS)
-        d.text((cx, (VU_MH - 14) * SS), name, font=f_ch, fill=(70, 45, 18), anchor="mm")
+        d.text((cx, 252 * SS), name, font=f_ch, fill=(70, 45, 18), anchor="mm")
         d.text((VU_MW * SS - 22 * SS, 22 * SS), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
         face = face.resize((VU_MW, VU_MH), Image.LANCZOS)
         img.paste(face, (mx, VU_FACE_Y))
@@ -602,7 +607,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
         x0 = ccx - (wm + wu) / 2
         d.text((x0, 428), main, font=f_num, fill=FG, anchor="ls")
         if unit:
-            d.text((x0 + wm, 428), unit, font=F_FMT, fill=DIM, anchor="ls")
+            d.text((x0 + wm, 428), unit, font=F_FMT, fill=FG, anchor="ls")
         FS_CACHE["arr"] = _to_xrgb(base)
         FS_CACHE["key"] = ck
     arr = FS_CACHE["arr"].copy()
@@ -611,20 +616,27 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
     atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
     target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
-    FS_DISP["m"] += (max(VU_MIN, min(VU_MAX, target)) - FS_DISP["m"]) * min(1.0, dt / 0.05)
+    FS_DISP["m"] = vu_step(FS_DISP["m"], target, dt)
     a = _vu_angle(FS_DISP["m"])
     cx, py = FS_FACE_W // 2, FS_PIVOT_Y
     tip_x = cx + FS_R_NEEDLE * math.sin(a)
     tip_y = py - FS_R_NEEDLE * math.cos(a)
     view = arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W]
     draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.8,
-                   color=(12, 20, 28), shadow=(70, 140, 185))
+                   color=(12, 20, 28))
     return arr.tobytes()
 
 
 VU_BASE: Image.Image | None = None
 VU_CACHE: dict = {"arr": None, "played": -1}
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
+VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.30   # mechanical limit: full scale in 300 ms
+
+
+def vu_step(disp: float, target: float, dt: float) -> float:
+    step = (max(VU_MIN, min(VU_MAX, target)) - disp) * min(1.0, dt / 0.05)
+    lim = VU_SLEW_DB_S * dt
+    return disp + max(-lim, min(lim, step))
 _VU_LAST_T = {"t": 0.0}
 VU_REG_Y0, VU_REG_Y1 = VU_FACE_Y, VU_FACE_Y + VU_MH   # needle sweep = whole face
 
@@ -672,17 +684,15 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
     for mx, ch in ((8, "l"), (404, "r")):
         atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
         target = VU_LEVELS[ch] - VU_REF_DBFS + atten
-        VU_DISP[ch] += (max(VU_MIN, min(VU_MAX, target)) - VU_DISP[ch]) * min(1.0, dt / 0.05)
+        VU_DISP[ch] = vu_step(VU_DISP[ch], target, dt)
         a = _vu_angle(VU_DISP[ch])
-        region = VU_BASE.crop((mx, VU_REG_Y0, mx + VU_MW, VU_REG_Y1))
-        d = ImageDraw.Draw(region)
         cx = VU_MW // 2
         py = VU_PIVOT_Y
         tip_x = cx + VU_R_NEEDLE * math.sin(a)
         tip_y = py - VU_R_NEEDLE * math.cos(a)
-        d.line((cx + 2, py, tip_x + 2, tip_y + 1), fill=(185, 140, 70), width=2)
-        d.line((cx, py, tip_x, tip_y), fill=(28, 20, 12), width=3)
-        arr[VU_REG_Y0:VU_REG_Y1, mx:mx + VU_MW] = _to_xrgb(region)
+        view = arr[VU_REG_Y0:VU_REG_Y1, mx:mx + VU_MW]
+        off = VU_REG_Y0 - VU_FACE_Y
+        draw_needle_aa(view, cx, py - off, tip_x, tip_y - off, color=(8, 16, 25))
     return arr.tobytes()
 
 
