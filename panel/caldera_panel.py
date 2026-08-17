@@ -427,13 +427,13 @@ def make_vu_base() -> Image.Image:
 
         majors = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
         for db in majors:
-            col = INK
+            col = (200, 30, 18) if db >= 2 else INK
             x1, y1 = pt(db, VU_R_ARC)
             x2, y2 = pt(db, VU_R_ARC + 24)
             d.line((x1, y1, x2, y2), fill=col, width=5)
             xl, yl = pt(db, VU_R_ARC + 42)
             lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
-            d.text((xl, yl), lbl, font=f_lab, fill=col, anchor="ms")
+            d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
 
         # minor ticks: thin, inward (below the arc)
         def minors_between(a, b, n):
@@ -442,7 +442,12 @@ def make_vu_base() -> Image.Image:
         pairs = list(zip(majors[:-1], majors[1:]))
         for a0, b0 in pairs:
             for db in minors_between(a0, b0, 4):
-                col = (205, 60, 20) if db > 0 else (55, 44, 32)
+                if db <= 0:
+                    col = (55, 44, 32)
+                elif db < 1:
+                    col = (212, 122, 22)     # orange group 0..+1
+                else:
+                    col = (200, 30, 18)      # red beyond +1
                 x1, y1 = pt(db, VU_R_ARC - 5)
                 x2, y2 = pt(db, VU_R_ARC - 30)
                 d.line((x1, y1, x2, y2), fill=col, width=1)
