@@ -735,7 +735,7 @@ def encoder_worker() -> None:
         return
     try:
         enc = RotaryEncoder(5, 6, max_steps=0, wrap=False)
-        btn = Button(13, pull_up=True, bounce_time=0.01, hold_time=0.8)
+        btn = Button(13, pull_up=True, bounce_time=0.03, hold_time=0.8)
     except Exception:
         return
 
@@ -764,7 +764,9 @@ def encoder_worker() -> None:
         click["pressed_at"] = time.monotonic()
 
     def on_held():
-        held["fired"] = True
+        held["fired"] = True          # swallow the release either way
+        if time.monotonic() - pending["last_rot"] < 0.5:
+            return                    # ghost hold while rotating
         _wake_screen()
         companion_cmd("skipPrevious")
 
