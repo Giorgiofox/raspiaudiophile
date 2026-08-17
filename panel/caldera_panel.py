@@ -516,9 +516,9 @@ def make_vu_base() -> Image.Image:
                 x2, y2 = pt(db, VU_R_ARC - 30)
                 d.line((x1, y1, x2, y2), fill=col, width=1 * SS)
         for db, col in ((VU_MIN, INK), (VU_MAX, (200, 30, 18))):
-            x1, y1 = pt(db, VU_R_ARC + 26)
-            x2, y2 = pt(db, VU_R_ARC - 60)
-            d.line((x1, y1, x2, y2), fill=col, width=2 * SS)
+            x1, y1 = pt(db, VU_R_ARC + 2)
+            x2, y2 = pt(db, VU_R_ARC - 34)
+            d.line((x1, y1, x2, y2), fill=col, width=5 * SS)
         d.text((cx, 252 * SS), name, font=f_ch, fill=(70, 45, 18), anchor="mm")
         d.text((VU_MW * SS - 22 * SS, 22 * SS), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
         face = face.resize((VU_MW, VU_MH), Image.LANCZOS)
