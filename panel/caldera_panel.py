@@ -694,8 +694,9 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
         crop = VU_BASE.crop((VU_TXT_X, VU_TXT_Y,
                              VU_TXT_X + VU_TXT_W, VU_TXT_Y + VU_TXT_H)).copy()
         dd = ImageDraw.Draw(crop)
-        dd.text((VU_TXT_W - 4, VU_TXT_H - 6), volume_db(vol),
-                font=F_FMT, fill=(15, 12, 8), anchor="rs")
+        f_vol_s = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 26)
+        dd.text((VU_TXT_W - 4, VU_TXT_H - 8), volume_db(vol),
+                font=f_vol_s, fill=(15, 12, 8), anchor="rs")
         VU_VOLTXT["arr"] = _to_xrgb(crop)
         VU_VOLTXT["vol"] = vol
     arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_TXT_X:VU_TXT_X + VU_TXT_W] = VU_VOLTXT["arr"]
