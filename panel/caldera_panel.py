@@ -430,7 +430,7 @@ def _amber_face(w: int, h: int) -> Image.Image:
 
 
 def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=1.0,
-                   color=(12, 20, 28), shadow=True):
+                   color=(12, 20, 28), shadow=True, sh_dx=5.0, sh_dy=6.0):
     """Anti-aliased tapered needle with a soft offset lamp shadow (BGR array)."""
     h, w = arr_bgr.shape[:2]
     x0 = max(0, int(min(cx, tip_x)) - 12); x1 = min(w, int(max(cx, tip_x)) + 13)
@@ -447,12 +447,12 @@ def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=1.0,
     sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
     if shadow:
         # distance from the pixel to the SHIFTED needle line (true cast shadow)
-        xs, ys = xx - 5.0, yy - 6.0
+        xs, ys = xx - sh_dx, yy - sh_dy
         t2 = np.clip(((xs - cx) * dx + (ys - py) * dy) / L2, 0.0, 1.0)
         dist_sh = np.hypot(xs - (cx + t2 * dx), ys - (py + t2 * dy))
         w_sh = w0 + (w1 - w0) * t2
-        a_sh = np.clip((w_sh + 3.0 - dist_sh) / 3.0, 0.0, 1.0)[..., None] * 0.55
-        sub = sub * (1.0 - a_sh * 0.62)
+        a_sh = np.clip((w_sh + 3.0 - dist_sh) / 3.0, 0.0, 1.0)[..., None] * 0.45
+        sub = sub * (1.0 - a_sh * 0.40)
     dist = np.hypot(xx - px, yy - pyl)
     a = np.clip((width + 1.1 - dist) / 1.1, 0.0, 1.0)[..., None]
     sub = sub * (1 - a) + np.array(color, np.float32) * a
@@ -623,7 +623,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
     tip_y = py - FS_R_NEEDLE * math.cos(a)
     view = arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W]
     draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.8,
-                   color=(12, 20, 28))
+                   color=(12, 20, 28), sh_dx=4.5 * math.sin(a), sh_dy=4.5)
     return arr.tobytes()
 
 
@@ -692,7 +692,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
         tip_y = py - VU_R_NEEDLE * math.cos(a)
         view = arr[VU_REG_Y0:VU_REG_Y1, mx:mx + VU_MW]
         off = VU_REG_Y0 - VU_FACE_Y
-        draw_needle_aa(view, cx, py - off, tip_x, tip_y - off, color=(8, 16, 25))
+        draw_needle_aa(view, cx, py - off, tip_x, tip_y - off, color=(8, 16, 25),
+                       sh_dx=5.5 * math.sin(a), sh_dy=5.0)
     return arr.tobytes()
 
 
