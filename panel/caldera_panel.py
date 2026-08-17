@@ -739,24 +739,29 @@ def encoder_worker() -> None:
     except Exception:
         return
 
-    pending = {"delta": 0}
+    pending = {"delta": 0, "last_rot": 0.0}
     lock = threading.Lock()
 
     def cw():
         with lock:
             pending["delta"] += 1
+            pending["last_rot"] = time.monotonic()
         _wake_screen()
 
     def ccw():
         with lock:
             pending["delta"] -= 1
+            pending["last_rot"] = time.monotonic()
         _wake_screen()
 
     enc.when_rotated_clockwise = cw
     enc.when_rotated_counter_clockwise = ccw
 
     held = {"fired": False}
-    click = {"timer": None, "last_release": 0.0}
+    click = {"timer": None, "last_release": 0.0, "pressed_at": 0.0}
+
+    def on_press():
+        click["pressed_at"] = time.monotonic()
 
     def on_held():
         held["fired"] = True
@@ -770,8 +775,13 @@ def encoder_worker() -> None:
         if held["fired"]:
             held["fired"] = False
             return
-        _wake_screen()
         now = time.monotonic()
+        # ghost-click guards: shaft wobble while rotating, sub-40ms glitches
+        if now - pending["last_rot"] < 0.3:
+            return
+        if now - click["pressed_at"] < 0.04:
+            return
+        _wake_screen()
         if click["timer"] is not None and now - click["last_release"] < 0.35:
             click["timer"].cancel()
             click["timer"] = None
@@ -782,11 +792,12 @@ def encoder_worker() -> None:
             click["timer"] = t
             t.start()
 
+    btn.when_pressed = on_press
     btn.when_held = on_held
     btn.when_released = on_release
 
     while True:
-        time.sleep(0.06)
+        time.sleep(0.2)
         with lock:
             d = pending["delta"]
             pending["delta"] = 0
