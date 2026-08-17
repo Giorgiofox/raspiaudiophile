@@ -707,6 +707,99 @@ def render_idle(vol: int) -> Image.Image:
 
 
 TL_SHARED = {"tl": None, "at": 0.0}
+COMPANION = "http://localhost:32500/player/playback"
+_CMD_ID = {"n": 100}
+VOL_LOCAL = {"v": None, "at": 0.0}
+
+
+def companion_cmd(path: str, **params) -> None:
+    _CMD_ID["n"] += 1
+    params.setdefault("commandID", _CMD_ID["n"])
+    try:
+        requests.get(f"{COMPANION}/{path}", params=params, timeout=2)
+    except requests.RequestException:
+        pass
+
+
+def _wake_screen() -> None:
+    if not SCREEN["on"]:
+        set_backlight(True)
+        SCREEN["wake_at"] = time.monotonic()
+
+
+def encoder_worker() -> None:
+    """KY-040 on GPIO 5 (CLK) / 6 (DT) / 13 (SW): volume + transport."""
+    try:
+        from gpiozero import RotaryEncoder, Button
+    except ImportError:
+        return
+    try:
+        enc = RotaryEncoder(5, 6, max_steps=0, wrap=False)
+        btn = Button(13, pull_up=True, bounce_time=0.01, hold_time=0.8)
+    except Exception:
+        return
+
+    pending = {"delta": 0}
+    lock = threading.Lock()
+
+    def cw():
+        with lock:
+            pending["delta"] += 1
+        _wake_screen()
+
+    def ccw():
+        with lock:
+            pending["delta"] -= 1
+        _wake_screen()
+
+    enc.when_rotated_clockwise = cw
+    enc.when_rotated_counter_clockwise = ccw
+
+    held = {"fired": False}
+    click = {"timer": None, "last_release": 0.0}
+
+    def on_held():
+        held["fired"] = True
+        _wake_screen()
+        companion_cmd("skipPrevious")
+
+    def single_click():
+        companion_cmd("playPause")
+
+    def on_release():
+        if held["fired"]:
+            held["fired"] = False
+            return
+        _wake_screen()
+        now = time.monotonic()
+        if click["timer"] is not None and now - click["last_release"] < 0.35:
+            click["timer"].cancel()
+            click["timer"] = None
+            companion_cmd("skipNext")
+        else:
+            click["last_release"] = now
+            t = threading.Timer(0.36, single_click)
+            click["timer"] = t
+            t.start()
+
+    btn.when_held = on_held
+    btn.when_released = on_release
+
+    while True:
+        time.sleep(0.1)
+        with lock:
+            d = pending["delta"]
+            pending["delta"] = 0
+        if d == 0:
+            continue
+        now = time.monotonic()
+        tl = TL_SHARED["tl"] or {}
+        base = VOL_LOCAL["v"] if (VOL_LOCAL["v"] is not None
+                                  and now - VOL_LOCAL["at"] < 3.0) else int(tl.get("volume", 50))
+        v = max(0, min(100, base + d))
+        VOL_LOCAL["v"] = v
+        VOL_LOCAL["at"] = now
+        companion_cmd("setParameters", volume=v, type="music")
 
 
 def timeline_poller() -> None:
@@ -723,6 +816,7 @@ def main() -> None:
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
     threading.Thread(target=timeline_poller, daemon=True).start()
+    threading.Thread(target=encoder_worker, daemon=True).start()
     last_key = None
     meta: dict = {}
     cover: Image.Image | None = None
