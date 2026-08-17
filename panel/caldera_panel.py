@@ -282,15 +282,22 @@ def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
     icon = {"playing": "▶", "paused": "⏸"}.get(state, "⏹")
     d.text((x, y + 140), f"{icon} {state}", font=F_SMALL, fill=ACCENT)
 
-    # volume row: sits between the text block and the waveform, no overlap
+    # volume row: [bar][big number][small dB], bar centered on the minus sign
     num = volume_db(vol)
-    d.text((W - 16, 352), num, font=F_DB, fill=FG, anchor="rs")
-    tw = d.textlength(num, font=F_DB)
-    bx1 = int(W - 16 - tw - 34)
-    yc = 352 - 26
-    if bx1 > x + 40:
-        d.rectangle((x, yc - 7, bx1, yc + 7), fill=(50, 50, 55))
-        d.rectangle((x, yc - 7, x + int((bx1 - x) * vol / 100), yc + 7), fill=ACCENT)
+    if num.endswith(" dB"):
+        main, unit = num[:-3], "dB"
+    else:
+        main, unit = num, ""
+    tw_unit = d.textlength(" " + unit, font=F_FMT) if unit else 0
+    d.text((W - 16 - tw_unit, 352), main, font=F_DB, fill=FG, anchor="rs")
+    if unit:
+        d.text((W - 16 - tw_unit + 6, 352), unit, font=F_FMT, fill=FG, anchor="ls")
+    tw_main = d.textlength(main, font=F_DB)
+    bx1 = int(W - 16 - tw_unit - tw_main - 26)
+    yc = 352 - 20                       # optical center of the minus sign
+    if bx1 > x + 50:
+        d.rectangle((x, yc - 8, bx1, yc + 8), fill=(50, 50, 55))
+        d.rectangle((x, yc - 8, x + int((bx1 - x) * vol / 100), yc + 8), fill=ACCENT)
 
     # waveform seekbar: two pastes from the prerendered strips
     if dur_ms > 0:
