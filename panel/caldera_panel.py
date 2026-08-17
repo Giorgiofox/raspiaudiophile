@@ -90,8 +90,13 @@ def timeline() -> dict | None:
     return None
 
 
+FALLBACK_SERVER = "http://192.168.1.250:32400"
+
+
 def server_base(tl: dict) -> str:
-    return f"{tl.get('protocol', 'http')}://{tl['address']}:{tl['port']}"
+    if "address" in tl and "port" in tl:
+        return f"{tl.get('protocol', 'http')}://{tl['address']}:{tl['port']}"
+    return FALLBACK_SERVER
 
 
 def fetch_meta(tl: dict) -> dict:
