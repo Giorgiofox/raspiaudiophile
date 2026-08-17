@@ -427,7 +427,12 @@ def make_vu_base() -> Image.Image:
 
         majors = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
         for db in majors:
-            col = (200, 30, 18) if db >= 2 else INK
+            if db >= 2:
+                col = (200, 30, 18)
+            elif db == 1:
+                col = (212, 122, 22)
+            else:
+                col = INK
             x1, y1 = pt(db, VU_R_ARC)
             x2, y2 = pt(db, VU_R_ARC + 24)
             d.line((x1, y1, x2, y2), fill=col, width=5)
@@ -488,15 +493,22 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
     played = 0
     if dur_ms > 0 and levels is not None:
         played = max(1, int(WAVE_COLS * min(t_ms / dur_ms, 1.0)))
-    if VU_CACHE["arr"] is None or abs(played - VU_CACHE["played"]) >= 3:
+    def _rebuild(pl):
         base = VU_BASE.copy()
         if levels is not None:
             yc2, hm = 445, 28
             base.paste(levels["off"].resize((WAVE_COLS, hm * 2 + 1)), (16, yc2 - hm))
             on = levels["on"].resize((WAVE_COLS, hm * 2 + 1))
-            base.paste(on.crop((0, 0, played, hm * 2 + 1)), (16, yc2 - hm))
+            base.paste(on.crop((0, 0, pl, hm * 2 + 1)), (16, yc2 - hm))
         VU_CACHE["arr"] = _to_xrgb(base)
-        VU_CACHE["played"] = played
+        VU_CACHE["played"] = pl
+        VU_CACHE["busy"] = False
+
+    if VU_CACHE["arr"] is None:
+        _rebuild(played)                      # first time: synchronous
+    elif abs(played - VU_CACHE["played"]) >= 6 and not VU_CACHE.get("busy"):
+        VU_CACHE["busy"] = True
+        threading.Thread(target=_rebuild, args=(played,), daemon=True).start()
     arr = VU_CACHE["arr"].copy()
 
     now = time.monotonic()
@@ -528,9 +540,22 @@ def render_idle(vol: int) -> Image.Image:
     return img
 
 
+TL_SHARED = {"tl": None, "at": 0.0}
+
+
+def timeline_poller() -> None:
+    while True:
+        fresh = timeline()
+        if fresh is not None:
+            TL_SHARED["tl"] = fresh
+            TL_SHARED["at"] = time.monotonic()
+        time.sleep(1.0)
+
+
 def main() -> None:
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
+    threading.Thread(target=timeline_poller, daemon=True).start()
     last_key = None
     meta: dict = {}
     cover: Image.Image | None = None
@@ -539,17 +564,10 @@ def main() -> None:
     last_vol = -1
     vol_changed_at = 0.0
     paused_since = 0.0
-    tl: dict | None = None
-    tl_at = 0.0
-    last_poll = 0.0
-
     while True:
         now = time.monotonic()
-        if now - last_poll >= 1.0:
-            fresh = timeline()
-            if fresh is not None:
-                tl, tl_at = fresh, now
-            last_poll = now
+        tl = TL_SHARED["tl"]
+        tl_at = TL_SHARED["at"]
 
         state = tl.get("state") if tl else None
         if state == "paused":
