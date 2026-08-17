@@ -266,6 +266,7 @@ def touch_listener() -> None:
             if now - last > 0.4:  # debounce
                 if not SCREEN["on"]:
                     set_backlight(True)   # wake only, keep the current view
+                    SCREEN["wake_at"] = now
                 else:
                     VIEW["mode"] = (VIEW["mode"] + 1) % 3
                 last = now
@@ -719,7 +720,8 @@ def main() -> None:
             last_key = None
             if idle_since == 0.0:
                 idle_since = now
-            elif SCREEN["on"] and now - idle_since > SCREEN_OFF_S:
+            elif (SCREEN["on"] and now - idle_since > SCREEN_OFF_S
+                  and now - SCREEN.get("wake_at", 0.0) > SCREEN_OFF_S):
                 set_backlight(False)
         else:
             idle_since = 0.0
