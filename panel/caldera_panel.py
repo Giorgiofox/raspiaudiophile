@@ -517,7 +517,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
     def _rebuild(pl):
         base = VU_BASE.copy()
         if levels is not None:
-            yc2, hm = 445, 28
+            yc2, hm = 437, 38
             base.paste(levels["off"].resize((WAVE_COLS, hm * 2 + 1)), (16, yc2 - hm))
             on = levels["on"].resize((WAVE_COLS, hm * 2 + 1))
             base.paste(on.crop((0, 0, pl, hm * 2 + 1)), (16, yc2 - hm))
