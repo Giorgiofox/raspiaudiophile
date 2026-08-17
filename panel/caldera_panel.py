@@ -504,7 +504,7 @@ def make_vu_base() -> Image.Image:
 
 
 FS_FACE_W, FS_FACE_H = 296, 248
-FS_FACE_X, FS_FACE_Y = 492, 36
+FS_FACE_X, FS_FACE_Y = 492, 14
 FS_SCALE = FS_FACE_W / 386
 FS_PIVOT_Y = int(402 * FS_SCALE)
 FS_R_ARC = int(262 * FS_SCALE)
