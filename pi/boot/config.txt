@@ -54,7 +54,7 @@ dtoverlay=nospi10
 
 [all]
 # Leikurvo DAC HAT (HiFiBerry DAC+ Pro clone, PCM5122): uncomment when mounted
-#dtoverlay=hifiberry-dacplus
+dtoverlay=hifiberry-dacplus
 dtoverlay=disable-bt
 disable_splash=1
 boot_delay=0
