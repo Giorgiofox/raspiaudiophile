@@ -429,38 +429,58 @@ def _amber_face(w: int, h: int) -> Image.Image:
     return Image.fromarray(np.dstack([r, g_, b]))
 
 
+def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=1.0,
+                   color=(12, 20, 28), shadow=None):
+    """Anti-aliased tapered needle blended straight into a BGR(X) array."""
+    h, w = arr_bgr.shape[:2]
+    x0 = max(0, int(min(cx, tip_x)) - 5); x1 = min(w, int(max(cx, tip_x)) + 6)
+    y0 = max(0, int(min(py, tip_y)) - 5); y1 = min(h, int(max(py, tip_y)) + 6)
+    if x1 <= x0 or y1 <= y0:
+        return
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+    dx, dy = tip_x - cx, tip_y - py
+    L2 = float(dx * dx + dy * dy) or 1.0
+    t = np.clip(((xx - cx) * dx + (yy - py) * dy) / L2, 0.0, 1.0)
+    dist = np.hypot(xx - (cx + t * dx), yy - (py + t * dy))
+    width = w0 + (w1 - w0) * t
+    if shadow is not None:
+        a = np.clip(width + 0.8 - np.hypot(xx - (cx + t * dx) - 2.0,
+                                           yy - (py + t * dy) - 2.0), 0, 1)[..., None] * 0.45
+        sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
+        arr_bgr[y0:y1, x0:x1, :3] = (sub * (1 - a) + np.array(shadow, np.float32) * a).astype(np.uint8)
+    a = np.clip(width + 0.6 - dist, 0.0, 1.0)[..., None]
+    sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
+    arr_bgr[y0:y1, x0:x1, :3] = (sub * (1 - a) + np.array(color, np.float32) * a).astype(np.uint8)
+
+
+SS = 3  # supersampling factor for static faces
+
+
 def make_vu_base() -> Image.Image:
     img = Image.new("RGB", (W, H), (10, 9, 8))
-    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 17)
-    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 52)
-    f_ch = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 17)
+    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 17 * SS)
+    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 52 * SS)
+    f_ch = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 17 * SS)
     for mx, name in ((8, "LEFT"), (406, "RIGHT")):
-        face = _amber_face(VU_MW, VU_MH)
+        face = _amber_face(VU_MW * SS, VU_MH * SS)
         d = ImageDraw.Draw(face)
-        cx, py = VU_MW // 2, VU_PIVOT_Y
+        cx, py = VU_MW * SS // 2, VU_PIVOT_Y * SS
 
         def pt(db, r):
             a = _vu_angle(db)
-            return (cx + r * math.sin(a), py - r * math.cos(a))
+            return (cx + r * SS * math.sin(a), py - r * SS * math.cos(a))
 
-        # main arc: black then red, thick
         pts = [pt(VU_MIN + (0 - VU_MIN) * i / 60, VU_R_ARC) for i in range(61)]
-        d.line(pts, fill=INK, width=6, joint="curve")
+        d.line(pts, fill=INK, width=6 * SS, joint="curve")
         segs = 24
         for i in range(segs):
             t = i / segs
             col = (int(205 + 20 * t), int(115 - 90 * t), int(25 - 10 * t))
             a1 = _vu_angle(VU_MAX * i / segs)
             a2 = _vu_angle(VU_MAX * (i + 1) / segs)
-            d.line((cx + VU_R_ARC * math.sin(a1), py - VU_R_ARC * math.cos(a1),
-                    cx + VU_R_ARC * math.sin(a2), py - VU_R_ARC * math.cos(a2)),
-                   fill=col, width=9)
-        # end hooks, downward
-        for db, col, wd in ((VU_MIN, INK, 6), (VU_MAX, (208, 30, 18), 9)):
-            x1, y1 = pt(db, VU_R_ARC)
-            x2, y2 = pt(db, VU_R_ARC - 34)
-            d.line((x1, y1, x2, y2), fill=col, width=wd)
-
+            d.line((cx + VU_R_ARC * SS * math.sin(a1), py - VU_R_ARC * SS * math.cos(a1),
+                    cx + VU_R_ARC * SS * math.sin(a2), py - VU_R_ARC * SS * math.cos(a2)),
+                   fill=col, width=9 * SS)
         majors = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
         for db in majors:
             if db >= 2:
@@ -471,31 +491,32 @@ def make_vu_base() -> Image.Image:
                 col = INK
             x1, y1 = pt(db, VU_R_ARC)
             x2, y2 = pt(db, VU_R_ARC + 24)
-            d.line((x1, y1, x2, y2), fill=col, width=5)
+            d.line((x1, y1, x2, y2), fill=col, width=5 * SS)
             xl, yl = pt(db, VU_R_ARC + 42)
             lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
             d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
 
-        # minor ticks: thin, inward (below the arc)
         def minors_between(a, b, n):
             for i in range(1, n):
                 yield a + (b - a) * i / n
-        pairs = list(zip(majors[:-1], majors[1:]))
-        for a0, b0 in pairs:
+        for a0, b0 in zip(majors[:-1], majors[1:]):
             for db in minors_between(a0, b0, 4):
                 if db <= 0:
                     col = (55, 44, 32)
                 elif db < 1:
-                    col = (212, 122, 22)     # orange group 0..+1
+                    col = (212, 122, 22)
                 else:
-                    col = (200, 30, 18)      # red beyond +1
+                    col = (200, 30, 18)
                 x1, y1 = pt(db, VU_R_ARC - 5)
                 x2, y2 = pt(db, VU_R_ARC - 30)
-                d.line((x1, y1, x2, y2), fill=col, width=1)
-
-        d.text((cx, 310), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
-        d.text((VU_MW - 22, 22), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
-
+                d.line((x1, y1, x2, y2), fill=col, width=1 * SS)
+        for db, col in ((VU_MIN, INK), (VU_MAX, (200, 30, 18))):
+            x1, y1 = pt(db, VU_R_ARC + 26)
+            x2, y2 = pt(db, VU_R_ARC - 60)
+            d.line((x1, y1, x2, y2), fill=col, width=2 * SS)
+        d.text((cx, (VU_MH - 14) * SS), name, font=f_ch, fill=(70, 45, 18), anchor="mm")
+        d.text((VU_MW * SS - 22 * SS, 22 * SS), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
+        face = face.resize((VU_MW, VU_MH), Image.LANCZOS)
         img.paste(face, (mx, VU_FACE_Y))
         dd = ImageDraw.Draw(img)
         dd.rectangle((mx - 1, VU_FACE_Y - 1, mx + VU_MW + 1, VU_FACE_Y + VU_MH + 1),
@@ -512,27 +533,27 @@ FS_R_NEEDLE = int(312 * FS_SCALE)
 
 
 def make_vu_face_small() -> Image.Image:
-    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 12)
-    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 32)
-    face = _amber_face(FS_FACE_W, FS_FACE_H)
+    f_lab = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 12 * SS)
+    f_vu = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 32 * SS)
+    face = _amber_face(FS_FACE_W * SS, FS_FACE_H * SS)
     d = ImageDraw.Draw(face)
-    cx, py = FS_FACE_W // 2, FS_PIVOT_Y
+    cx, py = FS_FACE_W * SS // 2, FS_PIVOT_Y * SS
 
     def pt(db, r):
         a = _vu_angle(db)
-        return (cx + r * math.sin(a), py - r * math.cos(a))
+        return (cx + r * SS * math.sin(a), py - r * SS * math.cos(a))
 
     pts = [pt(VU_MIN + (0 - VU_MIN) * i / 60, FS_R_ARC) for i in range(61)]
-    d.line(pts, fill=INK, width=4, joint="curve")
+    d.line(pts, fill=INK, width=4 * SS, joint="curve")
     segs = 20
     for i in range(segs):
         t = i / segs
         col = (int(205 + 20 * t), int(115 - 90 * t), int(25 - 10 * t))
         a1 = _vu_angle(VU_MAX * i / segs)
         a2 = _vu_angle(VU_MAX * (i + 1) / segs)
-        d.line((cx + FS_R_ARC * math.sin(a1), py - FS_R_ARC * math.cos(a1),
-                cx + FS_R_ARC * math.sin(a2), py - FS_R_ARC * math.cos(a2)),
-               fill=col, width=6)
+        d.line((cx + FS_R_ARC * SS * math.sin(a1), py - FS_R_ARC * SS * math.cos(a1),
+                cx + FS_R_ARC * SS * math.sin(a2), py - FS_R_ARC * SS * math.cos(a2)),
+               fill=col, width=6 * SS)
     for db in (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3):
         if db >= 2:
             col = (200, 30, 18)
@@ -542,12 +563,12 @@ def make_vu_face_small() -> Image.Image:
             col = INK
         x1, y1 = pt(db, FS_R_ARC)
         x2, y2 = pt(db, FS_R_ARC + 16)
-        d.line((x1, y1, x2, y2), fill=col, width=3)
+        d.line((x1, y1, x2, y2), fill=col, width=3 * SS)
         xl, yl = pt(db, FS_R_ARC + 24)
         lbl = "0" if db == 0 else (f"+{db}" if db > 0 else f"−{-db}")
         d.text((xl, yl), lbl, font=f_lab, fill=INK, anchor="ms")
-    d.text((cx, int(FS_FACE_H * 0.78)), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
-    return face
+    d.text((cx, int(FS_FACE_H * 0.78) * SS), "VU", font=f_vu, fill=(45, 36, 26), anchor="mm")
+    return face.resize((FS_FACE_W, FS_FACE_H), Image.LANCZOS)
 
 
 FS_FACE: Image.Image | None = None
@@ -592,14 +613,12 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
     target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
     FS_DISP["m"] += (max(VU_MIN, min(VU_MAX, target)) - FS_DISP["m"]) * min(1.0, dt / 0.05)
     a = _vu_angle(FS_DISP["m"])
-    region = FS_FACE.copy()
-    d = ImageDraw.Draw(region)
     cx, py = FS_FACE_W // 2, FS_PIVOT_Y
     tip_x = cx + FS_R_NEEDLE * math.sin(a)
     tip_y = py - FS_R_NEEDLE * math.cos(a)
-    d.line((cx + 1, py, tip_x + 1, tip_y + 1), fill=(185, 140, 70), width=2)
-    d.line((cx, py, tip_x, tip_y), fill=(28, 20, 12), width=3)
-    arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W] = _to_xrgb(region)
+    view = arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W]
+    draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.8,
+                   color=(12, 20, 28), shadow=(70, 140, 185))
     return arr.tobytes()
 
 
