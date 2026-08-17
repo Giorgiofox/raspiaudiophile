@@ -629,6 +629,10 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key) -> bytes:
 
 VU_BASE: Image.Image | None = None
 VU_CACHE: dict = {"arr": None, "played": -1}
+VU_VOLTXT = {"vol": None, "arr": None}
+VU_TXT_W, VU_TXT_H = 170, 46
+VU_TXT_X = 404 + VU_MW - VU_TXT_W - 10
+VU_TXT_Y = VU_FACE_Y + VU_MH - VU_TXT_H - 8
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
 VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.30   # mechanical limit: full scale in 300 ms
 
@@ -677,6 +681,16 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int) -> bytes:
         VU_CACHE["busy"] = True
         threading.Thread(target=_rebuild, args=(played,), daemon=True).start()
     arr = VU_CACHE["arr"].copy()
+
+    if VU_VOLTXT["vol"] != vol:
+        crop = VU_BASE.crop((VU_TXT_X, VU_TXT_Y,
+                             VU_TXT_X + VU_TXT_W, VU_TXT_Y + VU_TXT_H)).copy()
+        dd = ImageDraw.Draw(crop)
+        dd.text((VU_TXT_W - 4, VU_TXT_H - 6), volume_db(vol),
+                font=F_FMT, fill=(15, 12, 8), anchor="rs")
+        VU_VOLTXT["arr"] = _to_xrgb(crop)
+        VU_VOLTXT["vol"] = vol
+    arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_TXT_X:VU_TXT_X + VU_TXT_W] = VU_VOLTXT["arr"]
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
