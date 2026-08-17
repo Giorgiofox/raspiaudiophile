@@ -695,15 +695,15 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
     arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_TXT_X:VU_TXT_X + VU_TXT_W] = VU_VOLTXT["arr"]
 
     if fmt and VU_FMTTXT["fmt"] != fmt:
+        fw = 366
         crop = VU_BASE.crop((VU_FMT_X, VU_TXT_Y,
-                             VU_FMT_X + VU_TXT_W + 40, VU_TXT_Y + VU_TXT_H)).copy()
+                             VU_FMT_X + fw, VU_TXT_Y + VU_TXT_H)).copy()
         dd = ImageDraw.Draw(crop)
-        short = fmt.replace(" / 24-bit", "").replace(" / 16-bit", "")
-        dd.text((4, VU_TXT_H - 6), short, font=F_FMT, fill=(15, 12, 8), anchor="ls")
+        dd.text((4, VU_TXT_H - 6), fmt, font=F_FMT, fill=(15, 12, 8), anchor="ls")
         VU_FMTTXT["arr"] = _to_xrgb(crop)
         VU_FMTTXT["fmt"] = fmt
     if VU_FMTTXT["arr"] is not None:
-        arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_FMT_X:VU_FMT_X + VU_TXT_W + 40] = VU_FMTTXT["arr"]
+        arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_FMT_X:VU_FMT_X + 366] = VU_FMTTXT["arr"]
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
