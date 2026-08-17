@@ -523,7 +523,8 @@ def make_vu_base() -> Image.Image:
             x2, y2 = pt(db, VU_R_ARC - 34)
             d.line((x1, y1, x2, y2), fill=col, width=5 * SS)
         d.text((cx, 252 * SS), name, font=f_ch, fill=(70, 45, 18), anchor="mm")
-        d.text((VU_MW * SS - 22 * SS, 22 * SS), name[0], font=f_ch, fill=(120, 90, 50), anchor="mm")
+        f_corner = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 26 * SS)
+        d.text((VU_MW * SS - 26 * SS, 26 * SS), name[0], font=f_corner, fill=(110, 80, 42), anchor="mm")
         face = face.resize((VU_MW, VU_MH), Image.LANCZOS)
         img.paste(face, (mx, VU_FACE_Y))
         dd = ImageDraw.Draw(img)
@@ -584,11 +585,15 @@ FS_CACHE: dict = {"arr": None, "key": None}
 FS_DISP = {"m": VU_MIN}
 
 
-def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = "") -> bytes:
+def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = "",
+                         t_ms: int = 0, dur_ms: int = 0, levels=None) -> bytes:
     global FS_FACE
     if FS_FACE is None:
         FS_FACE = make_vu_face_small()
-    ck = (key, vol, fmt)
+    fs_played = 0
+    if dur_ms > 0 and levels is not None:
+        fs_played = max(1, int(296 * min(t_ms / dur_ms, 1.0)))
+    ck = (key, vol, fmt, fs_played // 4)
     if FS_CACHE["arr"] is None or FS_CACHE["key"] != ck:
         base = Image.new("RGB", (W, H), (0, 0, 0))
         d = ImageDraw.Draw(base)
@@ -602,6 +607,14 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
         if fmt:
             f_fmt_s = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
             d.text((ccx, 300), fmt, font=f_fmt_s, fill=(120, 200, 255), anchor="mm")
+        if levels is not None and dur_ms > 0:
+            wh = 27
+            off = levels["off"].resize((296, wh * 2 + 1))
+            on = levels["on"].resize((296, wh * 2 + 1))
+            wy = 330
+            base.paste(off, (492, wy))
+            if fs_played > 0:
+                base.paste(on.crop((0, 0, fs_played, wh * 2 + 1)), (492, wy))
         num = volume_db(vol)
         if num.endswith(" dB"):
             main, unit = num[:-3], " dB"
@@ -611,9 +624,9 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
         wm = d.textlength(main, font=f_num)
         wu = d.textlength(unit, font=F_FMT) if unit else 0
         x0 = ccx - (wm + wu) / 2
-        d.text((x0, 428), main, font=f_num, fill=FG, anchor="ls")
+        d.text((x0, 466), main, font=f_num, fill=FG, anchor="ls")
         if unit:
-            d.text((x0 + wm, 428), unit, font=F_FMT, fill=FG, anchor="ls")
+            d.text((x0 + wm, 466), unit, font=F_FMT, fill=FG, anchor="ls")
         FS_CACHE["arr"] = _to_xrgb(base)
         FS_CACHE["key"] = ck
     arr = FS_CACHE["arr"].copy()
@@ -924,7 +937,8 @@ def main() -> None:
             if state == "playing":
                 t_ms += int((now - tl_at) * 1000)  # interpolate between polls
             if VIEW["mode"] == 1:
-                FB.write_bytes(render_fullscreen_fb(cover, vol, last_key, meta.get("format", "")))
+                FB.write_bytes(render_fullscreen_fb(cover, vol, last_key, meta.get("format", ""),
+                                                    t_ms, int(tl.get("duration", 0)), levels))
                 last_frame = b""
                 time.sleep(0.04)
                 continue
