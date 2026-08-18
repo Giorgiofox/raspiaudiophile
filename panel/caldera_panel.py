@@ -12,6 +12,7 @@ Rendering: Pillow -> RGB565 -> framebuffer. No X server involved.
 import io
 import json
 import math
+import os
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -368,36 +369,39 @@ VU_REF_DBFS = -8.0   # 0 VU reference (calibrated by ear on quiet tracks)
 VU_LEVELS = {"l": -60.0, "r": -60.0}
 
 
+VU_FIFO = "/tmp/peppyalsa_fifo"
+
+
 def vu_capture() -> None:
-    try:
-        import alsaaudio
-    except ImportError:
-        return
+    # Levels come from the peppyalsa scope plugin inside the ALSA chain
+    # (pcm.caldera_tap): one uint32 per update on the FIFO, left channel in
+    # the low 16 bits, right in the high 16, linear scale 0..100 (meter_max).
+    # The writer closes the FIFO when playback stops -> read() returns b"".
     while True:
+        fd = -1
         try:
-            # STRICT hw params: must mirror the loop48 playback branch
-            # exactly (48k/S16/2ch) or the aloop card gets pinned wrong
-            # and every playback open dies with EINVAL.
-            pcm = alsaaudio.PCM(alsaaudio.PCM_CAPTURE, alsaaudio.PCM_NORMAL,
-                                device="hw:CARD=Loopback,DEV=1",
-                                channels=2, rate=48000,
-                                format=alsaaudio.PCM_FORMAT_S16_LE,
-                                periodsize=1200)
+            fd = os.open(VU_FIFO, os.O_RDONLY)  # blocks until a writer opens
+            last = time.monotonic()
             while True:
-                n, data = pcm.read()
-                if n <= 0:
-                    time.sleep(0.02)
-                    continue
-                a = np.frombuffer(data, dtype=np.int16).reshape(-1, 2).astype(np.float64)
-                blk = a.shape[0] / 48000.0
-                alpha = min(1.0, blk / 0.065)  # VU: 99% in 300 ms -> tau 65 ms
-                for i, ch in enumerate(("l", "r")):
-                    rms = np.sqrt(np.mean(a[:, i] ** 2))
-                    db = 20 * math.log10(max(rms, 1.0) / 32768.0)
+                data = os.read(fd, 4096)
+                if not data:
+                    raise EOFError("fifo writer closed")
+                word = int.from_bytes(data[-4:], "little")
+                now = time.monotonic()
+                alpha = min(1.0, (now - last) / 0.065)  # VU: 99% in 300 ms
+                last = now
+                for ch, v in (("l", word & 0xFFFF), ("r", (word >> 16) & 0xFFFF)):
+                    db = 20 * math.log10(max(v, 1) / 100.0)
                     VU_LEVELS[ch] += (db - VU_LEVELS[ch]) * alpha
         except Exception:
             VU_LEVELS["l"] = VU_LEVELS["r"] = -60.0
-            time.sleep(2)
+            time.sleep(1)
+        finally:
+            if fd != -1:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 VU_ANCHORS = (-20, -10, -7, -5, -3, -2, -1, 0, 1, 2, 3)
@@ -745,12 +749,25 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
     return arr.tobytes()
 
 
+IDLE_LOGO_PATH = Path("/usr/local/share/caldera/hires_logo.png")
+_IDLE_LOGO: Image.Image | None = None
+
+
 def render_idle(vol: int) -> Image.Image:
+    global _IDLE_LOGO
+    if _IDLE_LOGO is None and IDLE_LOGO_PATH.exists():
+        try:
+            _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((100, 100))
+        except OSError:
+            _IDLE_LOGO = None
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
-    d.text((W // 2, 150), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
-    d.text((W // 2, 255), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
-    d.text((W // 2, 355), "waiting for Plexamp…", font=F_SMALL, fill=DIM, anchor="mm")
+    if _IDLE_LOGO is not None:
+        img.paste(_IDLE_LOGO, (W // 2 - 50, 42), _IDLE_LOGO)
+    d.text((W // 2, 205), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
+    d.text((W // 2, 250), "D A C", font=F_FMT, fill=DIM, anchor="mm")
+    d.text((W // 2, 340), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
+    d.text((W // 2, 435), "waiting for Plexamp…", font=F_SMALL, fill=DIM, anchor="mm")
     return img
 
 
