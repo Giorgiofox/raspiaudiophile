@@ -261,16 +261,32 @@ def touch_listener() -> None:
     if dev is None:
         return
     last = 0.0
+    down_x = cur_x = None
     for ev in dev.read_loop():
-        if ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH and ev.value == 1:
+        if ev.type == evdev.ecodes.EV_ABS and ev.code in (
+                evdev.ecodes.ABS_X, evdev.ecodes.ABS_MT_POSITION_X):
+            cur_x = ev.value
+            if down_x is None:
+                down_x = ev.value
+        elif ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH:
+            if ev.value == 1:
+                down_x = cur_x = None      # gesture starts: wait for fresh X
+                continue
+            # release: decide tap vs horizontal swipe
             now = time.monotonic()
-            if now - last > 0.4:  # debounce
-                if not SCREEN["on"]:
-                    set_backlight(True)   # wake only, keep the current view
-                    SCREEN["wake_at"] = now
-                else:
-                    VIEW["mode"] = (VIEW["mode"] + 1) % 3
-                last = now
+            dx = (cur_x - down_x) if (down_x is not None and cur_x is not None) else 0
+            down_x = cur_x = None
+            if now - last <= 0.4:  # debounce
+                continue
+            last = now
+            if not SCREEN["on"]:
+                set_backlight(True)        # wake only, keep the current view
+                SCREEN["wake_at"] = now
+            elif abs(dx) >= 100 and VIEW["mode"] == 2 and len(SKIN_LIST) > 1:
+                step = -1 if dx > 0 else 1  # swipe left = next skin
+                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
+            else:
+                VIEW["mode"] = (VIEW["mode"] + 1) % 3
 
 
 def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
@@ -365,7 +381,7 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
 
 
 VU_MIN, VU_MAX = -20.0, 3.0
-VU_REF_DBFS = -8.0   # 0 VU reference (calibrated by ear on quiet tracks)
+VU_REF_DBFS = 0.0    # 0 VU reference vs peppyalsa PEAK levels (old RMS ref was -8)
 VU_LEVELS = {"l": -60.0, "r": -60.0}
 
 
@@ -749,6 +765,120 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
     return arr.tobytes()
 
 
+# ---------------------------------------------------------------- Peppy skins
+# PeppyMeter-format circular skins (bgr + rotating needle + optional fgr).
+# Skin 0 is the builtin amber VU; the rest come from SKIN_DIR/meters.txt.
+SKIN_DIR = Path("/usr/local/share/caldera/skins")
+SKIN_LIST: list[str] = ["amber"]
+_SKIN_CFG: dict[str, dict] = {}
+_SKIN_OBJ: dict[str, "PeppySkin"] = {}
+VU_SKIN = {"i": 0}
+
+
+def load_skin_configs() -> None:
+    import configparser
+    mt = SKIN_DIR / "meters.txt"
+    if not mt.exists():
+        return
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(mt)
+    except configparser.Error:
+        return
+    for name in cp.sections():
+        s = cp[name]
+        if s.get("meter.type", "").strip() != "circular":
+            continue
+        if not (SKIN_DIR / s.get("bgr.filename", "")).exists():
+            continue
+        _SKIN_CFG[name] = dict(s)
+        SKIN_LIST.append(name)
+
+
+def _blend_rgba(arr: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
+    """Alpha-blend an RGBA uint16 array into the XRGB framebuffer array."""
+    h, w = src.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    s = src[y0 - y:y1 - y, x0 - x:x1 - x]
+    al = s[..., 3:4]
+    dst = arr[y0:y1, x0:x1]
+    dst[..., :3] = ((s[..., (2, 1, 0)] * al
+                     + dst[..., :3].astype(np.uint16) * (255 - al)) // 255).astype(np.uint8)
+
+
+class PeppySkin:
+    """One circular PeppyMeter skin. Needle image points up, pivot sits
+    `distance` px below the image center, rotation is CCW-positive from
+    start.angle (volume 0) to stop.angle (volume 100)."""
+
+    def __init__(self, cfg: dict):
+        bgr = Image.open(SKIN_DIR / cfg["bgr.filename"]).convert("RGB")
+        if bgr.size != (W, H):
+            bgr = bgr.resize((W, H))
+        self.needle = Image.open(SKIN_DIR / cfg["indicator.filename"]).convert("RGBA")
+        self.fgr16 = None
+        fgr_name = cfg.get("fgr.filename", "").strip()
+        if fgr_name and (SKIN_DIR / fgr_name).exists():
+            fgr = Image.open(SKIN_DIR / fgr_name).convert("RGBA")
+            if fgr.size != (W, H):
+                fgr = fgr.resize((W, H))
+            # fgr is baked into the base; per frame it only needs re-blending
+            # where the needle was drawn on top of it
+            self.fgr16 = np.asarray(fgr, dtype=np.uint16)
+            bgr = Image.alpha_composite(bgr.convert("RGBA"), fgr).convert("RGB")
+        self.base = np.ascontiguousarray(_to_xrgb(bgr))
+        self.start = float(cfg["start.angle"])
+        self.stop = float(cfg["stop.angle"])
+        self.dist = float(cfg["distance"])
+        if int(cfg.get("channels", 2)) == 1:
+            self.origins = [(float(cfg["mono.origin.x"]), float(cfg["mono.origin.y"]))]
+        else:
+            self.origins = [(float(cfg["left.origin.x"]), float(cfg["left.origin.y"])),
+                            (float(cfg["right.origin.x"]), float(cfg["right.origin.y"]))]
+        self.disp = [0.0] * len(self.origins)   # smoothed linear 0..100
+        self._last_t = 0.0
+
+    def render(self, vol: int) -> bytes:
+        now = time.monotonic()
+        dt = min(0.3, now - self._last_t) if self._last_t else 0.03
+        self._last_t = now
+        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        arr = self.base.copy()
+        for i, (ox, oy) in enumerate(self.origins):
+            if len(self.origins) == 1:
+                db = max(VU_LEVELS["l"], VU_LEVELS["r"]) + atten
+            else:
+                db = VU_LEVELS["l" if i == 0 else "r"] + atten
+            v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
+            step = (v - self.disp[i]) * min(1.0, dt / 0.05)
+            lim = (100.0 / 0.30) * dt           # mechanical slew: full scale in 300 ms
+            self.disp[i] += max(-lim, min(lim, step))
+            a = self.start + (self.stop - self.start) * self.disp[i] / 100.0
+            rot = self.needle.rotate(a, resample=Image.BICUBIC, expand=True)
+            ar = math.radians(a)
+            x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
+            y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
+            _blend_rgba(arr, np.asarray(rot, dtype=np.uint16), x, y)
+            if self.fgr16 is not None:
+                x0, y0 = max(0, x), max(0, y)
+                x1, y1 = min(W, x + rot.width), min(H, y + rot.height)
+                if x1 > x0 and y1 > y0:
+                    _blend_rgba(arr, self.fgr16[y0:y1, x0:x1], x0, y0)
+        return arr.tobytes()
+
+
+def get_skin(name: str) -> "PeppySkin | None":
+    if name not in _SKIN_OBJ:
+        try:
+            _SKIN_OBJ[name] = PeppySkin(_SKIN_CFG[name])
+        except Exception:
+            _SKIN_OBJ[name] = None
+    return _SKIN_OBJ[name]
+
+
 IDLE_LOGO_PATH = Path("/usr/local/share/caldera/hires_logo.png")
 _IDLE_LOGO: Image.Image | None = None
 
@@ -891,6 +1021,7 @@ def timeline_poller() -> None:
 
 def main() -> None:
     set_backlight(True)   # sync real state: service may restart with screen off
+    load_skin_configs()
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
     threading.Thread(target=timeline_poller, daemon=True).start()
@@ -960,7 +1091,12 @@ def main() -> None:
                 time.sleep(0.04)
                 continue
             elif VIEW["mode"] == 2:
-                FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol, meta.get("format", "")))
+                name = SKIN_LIST[VU_SKIN["i"] % len(SKIN_LIST)]
+                skin = get_skin(name) if name != "amber" else None
+                if skin is not None:
+                    FB.write_bytes(skin.render(vol))
+                else:
+                    FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol, meta.get("format", "")))
                 last_frame = b""
                 time.sleep(0.025)
                 continue
