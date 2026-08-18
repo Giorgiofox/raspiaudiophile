@@ -1,3 +1,21 @@
+[bar]
+meter.type = linear
+channels = 2
+ui.refresh.period = 0.033
+bgr.filename = bar-bgr.png
+indicator.filename = bar-indicator.png
+left.x = 195
+left.y = 145
+right.x = 195
+right.y = 262
+position.regular = 11
+position.overload = 3
+step.width.regular = 34
+step.width.overload = 47
+meter.x = 0
+meter.y = 0
+screen.bgr = 
+
 [blue]
 meter.type = circular
 channels = 1
@@ -29,6 +47,40 @@ left.origin.x = 234
 left.origin.y = 322
 right.origin.x = 566
 right.origin.y = 322
+meter.x = 0
+meter.y = 0
+screen.bgr = 
+
+[dash]
+meter.type = linear
+channels = 2
+ui.refresh.period = 0.033
+bgr.filename = dash-bgr.png
+indicator.filename = dash-indicator.png
+left.x = 49
+left.y = 197
+right.x = 49
+right.y = 263
+position.regular = 9
+position.overload = 4
+step.width.regular = 56
+step.width.overload = 56
+meter.x = 0
+meter.y = 0
+screen.bgr = 
+
+[gas]
+meter.type = linear
+channels = 2
+ui.refresh.period = 0.033
+bgr.filename = gas-bgr.png
+indicator.filename = gas-indicator.png
+left.x = 76
+left.y = 195
+right.x = 76
+right.y = 252
+position.regular = 69
+step.width.regular = 10
 meter.x = 0
 meter.y = 0
 screen.bgr = 
@@ -246,6 +298,23 @@ meter.x = 0
 meter.y = 0
 screen.bgr = 
 
+[vertical-linear]
+meter.type = linear
+channels = 2
+direction = bottom-top
+ui.refresh.period = 0.033
+bgr.filename = vertical-linear-bgr.png
+indicator.filename = vertical-linear-indicator.png
+left.x = 363
+left.y = 44
+right.x = 416
+right.y = 44
+position.regular = 90
+step.width.regular = 4
+meter.x = 0
+meter.y = 0
+screen.bgr = 
+
 [vertical-circular]
 meter.type = circular
 channels = 2
@@ -303,4 +372,68 @@ mono.origin.x = 401
 mono.origin.y = 240
 meter.x = 0
 meter.y = 0
+screen.bgr = 
+
+[relax]
+meter.type = linear
+channels = 2
+direction = center-edges
+flip.left.x = True
+ui.refresh.period = 0.033
+bgr.filename = relax-bgr.jpg
+indicator.filename = relax-indicator.png
+left.x = 390
+left.y = 400
+right.x = 407
+right.y = 400
+position.regular = 16
+step.width.regular = 22
+screen.bgr = 
+
+[steam-punk]
+meter.type = linear
+channels = 2
+direction = top-bottom
+flip.right.x = True
+ui.refresh.period = 0.033
+bgr.filename = steam-punk-bgr.jpg
+indicator.filename = steam-punk-indicator.png
+left.x = 0
+left.y = 1
+right.x = 606
+right.y = 1
+position.regular = 20
+step.width.regular = 24
+screen.bgr = 
+
+[fantasy]
+meter.type = linear
+channels = 2
+direction = edges-center
+flip.right.x = True
+ui.refresh.period = 0.033
+bgr.filename = fantasy-bgr.jpg
+indicator.filename = fantasy-indicator.png
+left.x = 32
+left.y = 426
+right.x = 769
+right.y = 426
+position.regular = 10
+step.width.regular = 37
+screen.bgr = 
+
+[chillout]
+meter.type = linear
+channels = 2
+indicator.type = single
+direction = left-right
+ui.refresh.period = 0.033
+bgr.filename = chillout-bgr.jpg
+indicator.filename = chillout-indicator.png
+left.x = 38
+left.y = 374
+right.x = 38
+right.y = 402
+position.regular = 344
+step.width.regular = 2
 screen.bgr = 

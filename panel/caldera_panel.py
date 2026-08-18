@@ -797,7 +797,7 @@ def load_skin_configs() -> None:
         return
     for name in cp.sections():
         s = cp[name]
-        if name in SKIN_EXCLUDE or s.get("meter.type", "").strip() != "circular":
+        if name in SKIN_EXCLUDE or s.get("meter.type", "").strip() not in ("circular", "linear"):
             continue
         if not (SKIN_DIR / s.get("bgr.filename", "")).exists():
             continue
@@ -889,6 +889,85 @@ class PeppySkin:
         return arr.tobytes()
 
 
+class PeppyLinearSkin:
+    """PeppyMeter linear skin: the indicator image is revealed step by step
+    (or slid, for indicator.type=single) along the configured direction."""
+
+    def __init__(self, cfg: dict):
+        bgr = Image.open(SKIN_DIR / cfg["bgr.filename"]).convert("RGB")
+        if bgr.size != (W, H):
+            bgr = bgr.resize((W, H))
+        self.base = np.ascontiguousarray(_to_xrgb(bgr))
+        ind = Image.open(SKIN_DIR / cfg["indicator.filename"]).convert("RGBA")
+        self.single = cfg.get("indicator.type", "").strip() == "single"
+        self.dir = cfg.get("direction", "").strip() or "left-right"
+        pr = int(cfg.get("position.regular", 1))
+        po = int(cfg.get("position.overload", 0) or 0)
+        swr = int(cfg.get("step.width.regular", 1))
+        swo = int(cfg.get("step.width.overload", 0) or 0)
+        self.masks = ([0] + [n * swr for n in range(1, pr + 1)]
+                      + [pr * swr + n * swo for n in range(1, po + 1)])
+        self.step = 100.0 / (pr + po)
+
+        def _flag(key: str) -> bool:
+            return str(cfg.get(key, "")).strip().lower() in ("1", "true", "yes", "on")
+
+        left_ind = ind.transpose(Image.FLIP_LEFT_RIGHT) if _flag("flip.left.x") else ind
+        right_ind = ind.transpose(Image.FLIP_LEFT_RIGHT) if _flag("flip.right.x") else ind
+        self.ch = [
+            (int(cfg["left.x"]), int(cfg["left.y"]), np.asarray(left_ind, dtype=np.uint16), True),
+            (int(cfg["right.x"]), int(cfg["right.y"]), np.asarray(right_ind, dtype=np.uint16), False),
+        ]
+        self.disp = [0.0, 0.0]
+        self._last_t = 0.0
+
+    def render(self, vol: int, label: "str | None" = None) -> bytes:
+        now = time.monotonic()
+        dt = min(0.3, now - self._last_t) if self._last_t else 0.03
+        self._last_t = now
+        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        arr = self.base.copy()
+        for i, (x, y, ind, left) in enumerate(self.ch):
+            db = VU_LEVELS["l" if i == 0 else "r"] + atten
+            v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
+            step = (v - self.disp[i]) * min(1.0, dt / 0.05)
+            lim = (100.0 / 0.30) * dt
+            self.disp[i] += max(-lim, min(lim, step))
+            n = min(int(self.disp[i] / self.step), len(self.masks) - 1)
+            w = max(1, self.masks[n])
+            ih, iw = ind.shape[:2]
+            if not self.single:   # single: w is a travel offset, not a crop size
+                w = min(w, ih if self.dir in ("bottom-top", "top-bottom") else iw)
+            if self.single:
+                if self.dir == "bottom-top":
+                    _blend_rgba(arr, ind, x, y - w)
+                elif self.dir == "top-bottom":
+                    _blend_rgba(arr, ind, x, y + w)
+                else:
+                    _blend_rgba(arr, ind, x + w, y)
+            elif self.dir == "bottom-top":
+                _blend_rgba(arr, ind[ih - w:], x, y + ih - w)
+            elif self.dir == "top-bottom":
+                _blend_rgba(arr, ind[:w], x, y)
+            elif self.dir == "right-left":
+                _blend_rgba(arr, ind[:, iw - w:], x + iw - w, y)
+            elif self.dir == "edges-center":
+                if left:
+                    _blend_rgba(arr, ind[:, :w], x, y)
+                else:
+                    _blend_rgba(arr, ind[:, iw - w:], x - w, y)
+            elif self.dir == "center-edges":
+                if left:
+                    _blend_rgba(arr, ind[:, iw - w:], x - w, y)
+                else:
+                    _blend_rgba(arr, ind[:, :w], x, y)
+            else:   # left-right
+                _blend_rgba(arr, ind[:, :w], x, y)
+        if label:
+            skin_label_overlay(arr, label)
+        return arr.tobytes()
+
+
 _SKIN_LABEL = {"txt": None, "arr": None}
 
 
@@ -906,10 +985,12 @@ def skin_label_overlay(arr: np.ndarray, text: str) -> None:
     _blend_rgba(arr, _SKIN_LABEL["arr"], 16, 16)
 
 
-def get_skin(name: str) -> "PeppySkin | None":
+def get_skin(name: str) -> "PeppySkin | PeppyLinearSkin | None":
     if name not in _SKIN_OBJ:
         try:
-            _SKIN_OBJ[name] = PeppySkin(_SKIN_CFG[name])
+            cfg = _SKIN_CFG[name]
+            cls = PeppyLinearSkin if cfg.get("meter.type", "").strip() == "linear" else PeppySkin
+            _SKIN_OBJ[name] = cls(cfg)
         except Exception:
             _SKIN_OBJ[name] = None
     return _SKIN_OBJ[name]
