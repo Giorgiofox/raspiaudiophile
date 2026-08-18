@@ -278,12 +278,16 @@ def touch_listener() -> None:
                 set_backlight(True)         # wake only, keep the current view
                 SCREEN["wake_at"] = now
             elif (VIEW["mode"] == 2 and len(SKIN_LIST) > 1
-                  and cur_x is not None and cur_y is not None and cur_y > H - 130
-                  and (cur_x < 220 or cur_x > W - 220)):
-                # bottom corners in the VU view: previous / next skin
-                step = 1 if cur_x > W - 220 else -1
-                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
-                VU_SKIN["at"] = now
+                  and cur_x is not None and cur_y is not None and cur_y > H - 160):
+                # the whole bottom strip in the VU view belongs to skin
+                # switching: left third = previous, right third = next,
+                # middle inert — an imprecise tap must never change view
+                if cur_x < W // 3:
+                    VU_SKIN["i"] = (VU_SKIN["i"] - 1) % len(SKIN_LIST)
+                    VU_SKIN["at"] = now
+                elif cur_x > W - W // 3:
+                    VU_SKIN["i"] = (VU_SKIN["i"] + 1) % len(SKIN_LIST)
+                    VU_SKIN["at"] = now
             else:
                 VIEW["mode"] = (VIEW["mode"] + 1) % 3
 
@@ -774,7 +778,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
 # Skin 0 is the builtin amber VU; the rest come from SKIN_DIR/meters.txt.
 SKIN_DIR = Path("/usr/local/share/caldera/skins")
 SKIN_LIST: list[str] = ["amber"]
-SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal", "vintage"}   # user-vetoed
+SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal", "vintage",
+                "tube"}   # user-vetoed
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
 VU_SKIN = {"i": 0, "at": 0.0}
@@ -835,14 +840,20 @@ class PeppySkin:
             self.fgr16 = np.asarray(fgr, dtype=np.uint16)
             bgr = Image.alpha_composite(bgr.convert("RGBA"), fgr).convert("RGB")
         self.base = np.ascontiguousarray(_to_xrgb(bgr))
-        self.start = float(cfg["start.angle"])
-        self.stop = float(cfg["stop.angle"])
         self.dist = float(cfg["distance"])
+        # angles may be global (start.angle) or per channel (left.start.angle)
         if int(cfg.get("channels", 2)) == 1:
             self.origins = [(float(cfg["mono.origin.x"]), float(cfg["mono.origin.y"]))]
+            self.angles = [(float(cfg["start.angle"]), float(cfg["stop.angle"]))]
         else:
             self.origins = [(float(cfg["left.origin.x"]), float(cfg["left.origin.y"])),
                             (float(cfg["right.origin.x"]), float(cfg["right.origin.y"]))]
+            self.angles = [
+                (float(cfg.get("left.start.angle", cfg.get("start.angle"))),
+                 float(cfg.get("left.stop.angle", cfg.get("stop.angle")))),
+                (float(cfg.get("right.start.angle", cfg.get("start.angle"))),
+                 float(cfg.get("right.stop.angle", cfg.get("stop.angle")))),
+            ]
         self.disp = [0.0] * len(self.origins)   # smoothed linear 0..100
         self._last_t = 0.0
 
@@ -861,7 +872,8 @@ class PeppySkin:
             step = (v - self.disp[i]) * min(1.0, dt / 0.05)
             lim = (100.0 / 0.30) * dt           # mechanical slew: full scale in 300 ms
             self.disp[i] += max(-lim, min(lim, step))
-            a = self.start + (self.stop - self.start) * self.disp[i] / 100.0
+            start, stop = self.angles[i]
+            a = start + (stop - start) * self.disp[i] / 100.0
             rot = self.needle.rotate(a, resample=Image.BICUBIC, expand=True)
             ar = math.radians(a)
             x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
