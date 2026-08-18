@@ -61,15 +61,21 @@ Fully working. Registered with plex.tv as player "RaspiAudiophile".
 
 ```
 Plex server --(FLAC up to 24/192)--> Caldera daemon --> ALSA "caldera_tap"
-                                                          |-> hw DAC (bit-perfect, source rate)
-                                                          `-> plug @48k -> snd-aloop -> panel VU capture
+                                       (plug -> meter scope -> hw DAC, source rate)
+                                                     `-> peppyalsa -> /tmp/peppyalsa_fifo -> panel VU
 ```
 
-`/etc/asound.conf` defines the tap: a `multi` device duplicating the stream
-to the DAC and to a loopback. The loopback branch goes through a `plug`
-fixed at 48 kHz/S16 — **required**: without it, the panel's capture pins the
-snd-aloop card rate and Caldera's device open hangs at any other sample
-rate (track counter stuck at 0:00).
+`/etc/asound.conf` defines the tap: a `plug` over an alsa-lib `meter`
+device wrapping the DAC, with the [peppyalsa](https://github.com/project-owner/peppyalsa)
+scope plugin (the one Volumio uses) writing L/R peak levels to a FIFO the
+panel reads. One slave device only — any rate the DAC accepts opens.
+
+History: the previous tap was a `multi` device duplicating the stream to
+the DAC and a fixed-48k snd-aloop branch. `multi` couples the period/rate
+constraints of its slaves, so every 44.1k-family track failed to open
+(EINVAL) — the root cause of all "this album won't play" incidents. Gone
+for good. peppyalsa is built from source (needs `libfftw3-dev`, autotools);
+the FIFO is created at boot by `pi/etc/peppyalsa-tmpfiles.conf`.
 
 ## The panel (`panel/caldera_panel.py`)
 
@@ -143,7 +149,10 @@ Rule: every change made on the Pi gets synced back here, committed, pushed.
    `--login --player-name RaspiAudiophile` (plex.tv/link PIN),
    `loginctl enable-linger $USER`, set `audio.outputDeviceUid=caldera_tap`,
    `audio.sampleRate=0`, `audio.audioBufferMs=100`
-4. Copy `pi/etc/asound.conf`, `pi/etc/snd-aloop.conf` (modules-load),
+4. Build peppyalsa (`apt install libfftw3-dev autoconf automake libtool
+   libasound2-dev`, clone project-owner/peppyalsa, `./configure --prefix=/usr
+   && make && sudo make install`). Copy `pi/etc/asound.conf`,
+   `pi/etc/peppyalsa-tmpfiles.conf` to `/etc/tmpfiles.d/`,
    splash + vtunbind units, backlight udev rule; `pi/systemd-user/*` into
    `~/.config/systemd/user/`; panel into `~/caldera-panel/`; generate the
    splash with `make_splash.py`
@@ -171,7 +180,8 @@ always-on appliance.
 | Symptom | Check |
 |---|---|
 | Player vanishes / Plexamp spinner | Caldera event-loop freeze (1.0.47 bug, beta under observation): `curl -m 5 http://localhost:32500/resources`; watchdog restarts it within 30 s |
-| Songs stall at 0:00-0:01 | ALSA tap rate pinned: the loopback branch must go through the fixed-rate plug (see Audio path) |
+| Songs stall at 0:00-0:01 or some albums refuse to play | Historical multi/aloop tap symptom — should be extinct with the peppyalsa tap. If it returns: `aplay -D caldera_tap -f S16_LE -r 44100 /dev/zero` (silent) to probe |
+| VU needles dead, audio fine | Panel can't read `/tmp/peppyalsa_fifo`: check the FIFO exists (tmpfiles) and `libpeppyalsa.so` is installed |
 | "Failed to initialize audio backend" repeats, silent playback, frozen VU | Poisoned state after a device race at startup: `systemctl --user restart caldera-music` (the panel's strict-params capture prevents the race itself) |
 | Double-speed playback | Master clock mode on the clone HAT — keep `,slave` |
 | Audio dies when touching GPIO wires | You're on GPIO 5/6 (oscillator gates) or 18/19/21 (I2S) — move |
