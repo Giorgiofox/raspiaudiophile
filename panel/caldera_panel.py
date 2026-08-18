@@ -261,38 +261,15 @@ def touch_listener() -> None:
     if dev is None:
         return
     last = 0.0
-    touching = False
-    down_x = None
-    fired = False
-    last_abs = 0.0
+    cur_x = cur_y = None
     for ev in dev.read_loop():
-        if ev.type == evdev.ecodes.EV_ABS and ev.code in (
-                evdev.ecodes.ABS_X, evdev.ecodes.ABS_MT_POSITION_X):
-            now = time.monotonic()
-            if now - last_abs > 0.25:
-                # long gap = new gesture, even if the driver missed the
-                # release event: restart the swipe from here (this was the
-                # source of "random" skin changes)
-                touching, down_x, fired = True, ev.value, False
-            last_abs = now
-            if not touching:
-                continue
-            if down_x is None:
-                down_x = ev.value
-            elif (not fired and abs(ev.value - down_x) >= 60
-                  and SCREEN["on"] and VIEW["mode"] == 2 and len(SKIN_LIST) > 1):
-                # live swipe: switch skin as soon as the threshold is crossed
-                step = -1 if ev.value > down_x else 1   # swipe left = next
-                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
-                VU_SKIN["at"] = now
-                fired = True
-        elif ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH:
-            if ev.value == 1:
-                touching, down_x, fired = True, None, False
-                continue
-            touching = False
-            if fired:
-                continue                    # swipe already handled
+        if ev.type == evdev.ecodes.EV_ABS:
+            if ev.code in (evdev.ecodes.ABS_X, evdev.ecodes.ABS_MT_POSITION_X):
+                cur_x = ev.value
+            elif ev.code in (evdev.ecodes.ABS_Y, evdev.ecodes.ABS_MT_POSITION_Y):
+                cur_y = ev.value
+        elif (ev.type == evdev.ecodes.EV_KEY
+              and ev.code == evdev.ecodes.BTN_TOUCH and ev.value == 0):
             now = time.monotonic()
             if now - last <= 0.4:  # debounce
                 continue
@@ -300,6 +277,13 @@ def touch_listener() -> None:
             if not SCREEN["on"]:
                 set_backlight(True)         # wake only, keep the current view
                 SCREEN["wake_at"] = now
+            elif (VIEW["mode"] == 2 and len(SKIN_LIST) > 1
+                  and cur_x is not None and cur_y is not None and cur_y > H - 130
+                  and (cur_x < 220 or cur_x > W - 220)):
+                # bottom corners in the VU view: previous / next skin
+                step = 1 if cur_x > W - 220 else -1
+                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
+                VU_SKIN["at"] = now
             else:
                 VIEW["mode"] = (VIEW["mode"] + 1) % 3
 
@@ -790,7 +774,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
 # Skin 0 is the builtin amber VU; the rest come from SKIN_DIR/meters.txt.
 SKIN_DIR = Path("/usr/local/share/caldera/skins")
 SKIN_LIST: list[str] = ["amber"]
-SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal"}   # user-vetoed
+SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal", "vintage"}   # user-vetoed
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
 VU_SKIN = {"i": 0, "at": 0.0}
