@@ -407,7 +407,9 @@ def vu_capture() -> None:
                 alpha = min(1.0, (now - last) / 0.065)  # VU: 99% in 300 ms
                 last = now
                 for ch, v in (("l", word & 0xFFFF), ("r", (word >> 16) & 0xFFFF)):
-                    db = 20 * math.log10(max(v, 1) / 100.0)
+                    # v == 0 is true silence: floor deep enough that the
+                    # volume compensation can never lift it off the pin
+                    db = 20 * math.log10(v / 100.0) if v > 0 else -90.0
                     VU_LEVELS[ch] += (db - VU_LEVELS[ch]) * alpha
         except Exception:
             VU_LEVELS["l"] = VU_LEVELS["r"] = -60.0
