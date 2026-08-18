@@ -261,30 +261,36 @@ def touch_listener() -> None:
     if dev is None:
         return
     last = 0.0
-    down_x = cur_x = None
+    touching = False
+    down_x = None
+    fired = False
     for ev in dev.read_loop():
         if ev.type == evdev.ecodes.EV_ABS and ev.code in (
                 evdev.ecodes.ABS_X, evdev.ecodes.ABS_MT_POSITION_X):
-            cur_x = ev.value
+            if not touching:
+                continue
             if down_x is None:
                 down_x = ev.value
+            elif (not fired and abs(ev.value - down_x) >= 60
+                  and SCREEN["on"] and VIEW["mode"] == 2 and len(SKIN_LIST) > 1):
+                # live swipe: switch skin as soon as the threshold is crossed
+                step = -1 if ev.value > down_x else 1   # swipe left = next
+                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
+                fired = True
         elif ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH:
             if ev.value == 1:
-                down_x = cur_x = None      # gesture starts: wait for fresh X
+                touching, down_x, fired = True, None, False
                 continue
-            # release: decide tap vs horizontal swipe
+            touching = False
+            if fired:
+                continue                    # swipe already handled
             now = time.monotonic()
-            dx = (cur_x - down_x) if (down_x is not None and cur_x is not None) else 0
-            down_x = cur_x = None
             if now - last <= 0.4:  # debounce
                 continue
             last = now
             if not SCREEN["on"]:
-                set_backlight(True)        # wake only, keep the current view
+                set_backlight(True)         # wake only, keep the current view
                 SCREEN["wake_at"] = now
-            elif abs(dx) >= 100 and VIEW["mode"] == 2 and len(SKIN_LIST) > 1:
-                step = -1 if dx > 0 else 1  # swipe left = next skin
-                VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
             else:
                 VIEW["mode"] = (VIEW["mode"] + 1) % 3
 
