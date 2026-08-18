@@ -15,8 +15,8 @@ f_sub = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 24)
 f_small = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 15)
 
 try:
-    logo = Image.open(LOGO).convert("RGBA").resize((120, 120))
-    img.paste(logo, (W // 2 - 60, 60), logo)
+    logo = Image.open(LOGO).convert("RGBA").resize((170, 170))
+    img.paste(logo, (W // 2 - 85, 40), logo)
 except OSError:
     pass
 

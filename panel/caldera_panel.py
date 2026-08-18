@@ -264,9 +264,17 @@ def touch_listener() -> None:
     touching = False
     down_x = None
     fired = False
+    last_abs = 0.0
     for ev in dev.read_loop():
         if ev.type == evdev.ecodes.EV_ABS and ev.code in (
                 evdev.ecodes.ABS_X, evdev.ecodes.ABS_MT_POSITION_X):
+            now = time.monotonic()
+            if now - last_abs > 0.25:
+                # long gap = new gesture, even if the driver missed the
+                # release event: restart the swipe from here (this was the
+                # source of "random" skin changes)
+                touching, down_x, fired = True, ev.value, False
+            last_abs = now
             if not touching:
                 continue
             if down_x is None:
@@ -276,6 +284,7 @@ def touch_listener() -> None:
                 # live swipe: switch skin as soon as the threshold is crossed
                 step = -1 if ev.value > down_x else 1   # swipe left = next
                 VU_SKIN["i"] = (VU_SKIN["i"] + step) % len(SKIN_LIST)
+                VU_SKIN["at"] = now
                 fired = True
         elif ev.type == evdev.ecodes.EV_KEY and ev.code == evdev.ecodes.BTN_TOUCH:
             if ev.value == 1:
@@ -704,7 +713,8 @@ def _to_xrgb(img: Image.Image) -> np.ndarray:
     return out
 
 
-def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> bytes:
+def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
+                 label: "str | None" = None) -> bytes:
     """Full-frame XRGB bytes; only the needle regions are redrawn per call."""
     global VU_BASE
     if VU_BASE is None:
@@ -770,6 +780,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
         off = VU_REG_Y0 - VU_FACE_Y
         draw_needle_aa(view, cx, py - off, tip_x, tip_y - off, color=(8, 16, 25),
                        sh_dx=5.5 * math.sin(a), sh_dy=5.0)
+    if label:
+        skin_label_overlay(arr, label)
     return arr.tobytes()
 
 
@@ -778,9 +790,10 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "") -> byt
 # Skin 0 is the builtin amber VU; the rest come from SKIN_DIR/meters.txt.
 SKIN_DIR = Path("/usr/local/share/caldera/skins")
 SKIN_LIST: list[str] = ["amber"]
+SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal"}   # user-vetoed
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
-VU_SKIN = {"i": 0}
+VU_SKIN = {"i": 0, "at": 0.0}
 
 
 def load_skin_configs() -> None:
@@ -795,7 +808,7 @@ def load_skin_configs() -> None:
         return
     for name in cp.sections():
         s = cp[name]
-        if s.get("meter.type", "").strip() != "circular":
+        if name in SKIN_EXCLUDE or s.get("meter.type", "").strip() != "circular":
             continue
         if not (SKIN_DIR / s.get("bgr.filename", "")).exists():
             continue
@@ -849,7 +862,7 @@ class PeppySkin:
         self.disp = [0.0] * len(self.origins)   # smoothed linear 0..100
         self._last_t = 0.0
 
-    def render(self, vol: int) -> bytes:
+    def render(self, vol: int, label: "str | None" = None) -> bytes:
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
@@ -875,7 +888,26 @@ class PeppySkin:
                 x1, y1 = min(W, x + rot.width), min(H, y + rot.height)
                 if x1 > x0 and y1 > y0:
                     _blend_rgba(arr, self.fgr16[y0:y1, x0:x1], x0, y0)
+        if label:
+            skin_label_overlay(arr, label)
         return arr.tobytes()
+
+
+_SKIN_LABEL = {"txt": None, "arr": None}
+
+
+def skin_label_overlay(arr: np.ndarray, text: str) -> None:
+    """Blend the skin name (shown briefly after a swipe) into the frame."""
+    if _SKIN_LABEL["txt"] != text:
+        f = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 28)
+        tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        w = int(tmp.textlength(text, font=f)) + 24
+        box = Image.new("RGBA", (w, 46), (0, 0, 0, 150))
+        ImageDraw.Draw(box).text((12, 23), text, font=f,
+                                 fill=(255, 255, 255, 255), anchor="lm")
+        _SKIN_LABEL["arr"] = np.asarray(box, dtype=np.uint16)
+        _SKIN_LABEL["txt"] = text
+    _blend_rgba(arr, _SKIN_LABEL["arr"], 16, 16)
 
 
 def get_skin(name: str) -> "PeppySkin | None":
@@ -895,13 +927,13 @@ def render_idle(vol: int) -> Image.Image:
     global _IDLE_LOGO
     if _IDLE_LOGO is None and IDLE_LOGO_PATH.exists():
         try:
-            _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((100, 100))
+            _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((150, 150))
         except OSError:
             _IDLE_LOGO = None
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     if _IDLE_LOGO is not None:
-        img.paste(_IDLE_LOGO, (W // 2 - 50, 42), _IDLE_LOGO)
+        img.paste(_IDLE_LOGO, (W // 2 - 75, 25), _IDLE_LOGO)
     d.text((W // 2, 205), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
     d.text((W // 2, 250), "D A C", font=F_FMT, fill=DIM, anchor="mm")
     d.text((W // 2, 340), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
@@ -1100,11 +1132,13 @@ def main() -> None:
                 continue
             elif VIEW["mode"] == 2:
                 name = SKIN_LIST[VU_SKIN["i"] % len(SKIN_LIST)]
+                label = name if now - VU_SKIN["at"] < 1.5 else None
                 skin = get_skin(name) if name != "amber" else None
                 if skin is not None:
-                    FB.write_bytes(skin.render(vol))
+                    FB.write_bytes(skin.render(vol, label))
                 else:
-                    FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol, meta.get("format", "")))
+                    FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol,
+                                                meta.get("format", ""), label))
                 last_frame = b""
                 time.sleep(0.025)
                 continue
