@@ -779,7 +779,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
 SKIN_DIR = Path("/usr/local/share/caldera/skins")
 SKIN_LIST: list[str] = ["amber"]
 SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal", "vintage",
-                "tube"}   # user-vetoed
+                "tube", "gas", "vertical-linear", "relax", "steam-punk",
+                "fantasy", "chillout"}   # user-vetoed
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
 VU_SKIN = {"i": 0, "at": 0.0}
