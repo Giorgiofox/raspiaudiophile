@@ -1235,11 +1235,18 @@ def encoder_worker() -> None:
     btn.when_held = on_held
     btn.when_released = on_release
 
+    # some KY-040 clones emit 2 quadrature cycles per physical detent:
+    # divide raw counts, carrying the remainder so slow turns are not lost
+    divisor = max(1, cfg("encoder", "detent_divisor", 1))
+    carry = 0
     while True:
         time.sleep(0.2)
         with lock:
-            d = pending["delta"]
+            raw = pending["delta"]
             pending["delta"] = 0
+        raw += carry
+        d = int(raw / divisor)
+        carry = raw - d * divisor
         if d == 0:
             continue
         now = time.monotonic()
