@@ -50,8 +50,23 @@ A second issue makes recovery harder: in this frozen state the process
 also ignores SIGTERM, so `systemctl stop` hangs until the unit timeout.
 I had to add `TimeoutStopSec=5` to make an external watchdog effective.
 
-Happy to provide full verbose logs on the next occurrence (`--verbose`
-drop-in is in place). Is there a workaround to force the LAN connection
-and avoid the plex.direct route for the seekprint/levels fetches? That
-request failing after 12-24 s appears to be what wedges the connection
-race.
+Further diagnosis (updated):
+
+- The server (Plex in Docker) advertises 17 "local" connection
+  candidates — every Docker bridge network (172.x.0.1, 192.168.x.1)
+  plus LAN and WAN. `warmupConnection: refreshing + racing` completes
+  (1.5-12 s), but every failing seekprint fetch appears to trigger a
+  fresh refresh+race, and all other requests (including Companion
+  handlers) queue behind it.
+- The seekprint/levels endpoint itself is fast: curl from the same host
+  answers the 404 in 0.01-0.3 s on every advertised route. The 12-24 s
+  "failed after" figures are internal queuing, not network latency.
+- On 1.0.47 the Companion HTTP server never recovers: after the
+  seekprint churn ends (zero race log lines for minutes), port 32500
+  still accepts TCP but never answers — permanently wedged event loop.
+  The wedged process also ignores SIGTERM.
+- 1.1.0-beta.1 behaves correctly in the same scenario: same queue, same
+  404s, Companion stays responsive. So the fix seems to already exist
+  in the beta — consider backporting to stable, and consider capping
+  connection-race refreshes when a request fails with an HTTP-level
+  error (404 is not a connectivity failure).

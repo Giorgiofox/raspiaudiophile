@@ -187,7 +187,8 @@ always-on appliance.
 
 | Symptom | Check |
 |---|---|
-| Player vanishes / Plexamp spinner | Caldera event-loop freeze (1.0.47 bug, beta under observation): `curl -m 5 http://localhost:32500/resources`; watchdog restarts it within 30 s |
+| Player vanishes / Plexamp spinner | Caldera event-loop freeze — FIXED in 1.1.0-beta.1, stable 1.0.47 wedges permanently (details in docs/caldera-freeze-report.md). Stay on the beta channel. Check `cat ~/caldera-music/VERSION`; probe `curl -m 5 http://localhost:32500/resources` |
+| Playback stalls only on freshly added albums | Loudness data missing server-side: enable "Analyze audio tracks for loudness" (asap) on the Plex server, or trigger `POST /butler/LoudnessAnalysis` |
 | Songs stall at 0:00-0:01 or some albums refuse to play | Historical multi/aloop tap symptom — should be extinct with the peppyalsa tap. If it returns: `aplay -D caldera_tap -f S16_LE -r 44100 /dev/zero` (silent) to probe |
 | VU needles dead, audio fine | Panel can't read `/tmp/peppyalsa_fifo`: check the FIFO exists (tmpfiles) and `libpeppyalsa.so` is installed |
 | "Failed to initialize audio backend" repeats, silent playback, frozen VU | Poisoned state after a device race at startup: `systemctl --user restart caldera-music` (the panel's strict-params capture prevents the race itself) |

@@ -1033,17 +1033,17 @@ def render_idle(vol: int) -> Image.Image:
     global _IDLE_LOGO
     if _IDLE_LOGO is None and IDLE_LOGO_PATH.exists():
         try:
-            _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((150, 150))
+            _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((200, 200))
         except OSError:
             _IDLE_LOGO = None
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     if _IDLE_LOGO is not None:
-        img.paste(_IDLE_LOGO, (W // 2 - 75, 25), _IDLE_LOGO)
-    d.text((W // 2, 205), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
-    d.text((W // 2, 250), "D A C", font=F_FMT, fill=DIM, anchor="mm")
-    d.text((W // 2, 340), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
-    d.text((W // 2, 435), "waiting for Plexamp…", font=F_SMALL, fill=DIM, anchor="mm")
+        img.paste(_IDLE_LOGO, (W // 2 - 100, 15), _IDLE_LOGO)
+    d.text((W // 2, 255), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
+    d.text((W // 2, 298), "D A C", font=F_FMT, fill=DIM, anchor="mm")
+    d.text((W // 2, 372), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
+    d.text((W // 2, 440), "Waiting for Plexamp Server", font=F_SMALL, fill=DIM, anchor="mm")
     return img
 
 
