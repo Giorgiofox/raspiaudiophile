@@ -14,6 +14,7 @@ Configuration: /etc/raspiaudiophile.conf (see the example in pi/etc/).
 
 import fcntl
 import io
+import select
 import json
 import math
 import os
@@ -457,6 +458,12 @@ def vu_capture() -> None:
             fd = os.open(VU_FIFO, os.O_RDONLY)  # blocks until a writer opens
             last = time.monotonic()
             while True:
+                ready, _, _ = select.select([fd], [], [], 0.5)
+                if not ready:
+                    # writer alive but silent (pause): levels are stale,
+                    # let the needles fall to rest instead of freezing
+                    VU_LEVELS["l"] = VU_LEVELS["r"] = -90.0
+                    continue
                 data = os.read(fd, 4096)
                 if not data:
                     raise EOFError("fifo writer closed")
