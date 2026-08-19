@@ -550,11 +550,11 @@ _NEEDLE_LRU: dict = {}
 
 def needle_sprite(kind: str, angle: float, cx, py, tip_x, tip_y, **kw):
     """LRU cache of PIL needle sprites, quantized to ~0.11 degrees."""
-    key = (kind, int(round(angle * 500)))
+    key = (kind, int(round(angle * 300)))
     spr = _NEEDLE_LRU.get(key)
     if spr is None:
         spr = _gen_needle_sprite(cx, py, tip_x, tip_y, **kw)
-        if len(_NEEDLE_LRU) > 320:
+        if len(_NEEDLE_LRU) > 48:    # RAM cap: ~7 MB worst case
             _NEEDLE_LRU.clear()
         _NEEDLE_LRU[key] = spr
     return spr
@@ -567,6 +567,23 @@ def paste_sprite(frame: Image.Image, spr, ox: int = 0, oy: int = 0):
     frame.paste(img, (x0, y0), img)
     return (max(0, x0), max(0, y0),
             min(W, x0 + img.width), min(H, y0 + img.height))
+
+
+_FADED = {}
+
+
+def faded_sprite(key, img: Image.Image, factor: float = 0.45) -> Image.Image:
+    """Cached copy of an RGBA sprite with its alpha scaled down — used as
+    the motion-blur trail when the needle jumps a lot in one frame (a fast
+    needle drawn crisp at two spots reads as TWO needles, a 'V')."""
+    f = _FADED.get(key)
+    if f is None:
+        f = img.copy()
+        f.putalpha(f.getchannel("A").point(lambda v: int(v * factor)))
+        if len(_FADED) > 96:
+            _FADED.clear()
+        _FADED[key] = f
+    return f
 
 SS = 3  # supersampling factor for static faces
 
@@ -771,6 +788,7 @@ VU_TXT_W, VU_TXT_H = 170, 46
 VU_TXT_X = 404 + VU_MW - VU_TXT_W - 10
 VU_TXT_Y = VU_FACE_Y + VU_MH - VU_TXT_H - 8
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
+VU_PREV_A: dict = {}
 VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.30   # mechanical limit: full scale in 300 ms
 
 
@@ -849,6 +867,17 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
         tip_x = cx + VU_R_NEEDLE * math.sin(a)
         tip_y = py - VU_R_NEEDLE * math.cos(a)
         off = VU_REG_Y0 - VU_FACE_Y
+        prev = VU_PREV_A.get(ch, a)
+        VU_PREV_A[ch] = a
+        if abs(a - prev) > 0.03:      # fast sweep: draw a faded trail at the
+            am = (a + prev) / 2.0     # midpoint so it reads as blur, not "V"
+            mtx = cx + VU_R_NEEDLE * math.sin(am)
+            mty = py - VU_R_NEEDLE * math.cos(am)
+            ms = needle_sprite("vu", am, cx, py - off, mtx, mty - off,
+                               color=(8, 16, 25), sh_dx=5.5 * math.sin(am), sh_dy=5.0)
+            fs_img = faded_sprite(("vu", int(round(am * 300))), ms[0])
+            wk["rects"].append(paste_sprite(frame, (fs_img, ms[1], ms[2]),
+                                            ox=mx, oy=VU_REG_Y0))
         spr = needle_sprite("vu", a, cx, py - off, tip_x, tip_y - off,
                             color=(8, 16, 25), sh_dx=5.5 * math.sin(a), sh_dy=5.0)
         wk["rects"].append(paste_sprite(frame, spr, ox=mx, oy=VU_REG_Y0))
@@ -868,6 +897,7 @@ SKIN_EXCLUDE = {s.strip() for s in
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
 VU_SKIN = {"i": 0, "at": 0.0}
+LAST_SKIN = {"n": None}
 
 
 def load_skin_configs() -> None:
@@ -930,7 +960,8 @@ class PeppySkin:
         self.frame = None
         self.rects: list = []
         self._label = object()
-        self._spr: dict = {}    # quantized angle -> precomposited sprite
+        self._spr: dict = {}    # quantized angle -> rotated sprite
+        self._prev_a = [None] * len(self.origins)
 
     def render(self, vol: int, label: "str | None" = None):
         now = time.monotonic()
@@ -960,23 +991,32 @@ class PeppySkin:
             start, stop = self.angles[i]
             a = start + (stop - start) * self.disp[i] / 100.0
             ab = round(a * 2) / 2.0            # 0.5 degree sprite buckets
-            rot = self._spr.get(ab)
-            if rot is None:
-                rot = self.needle.rotate(ab, resample=Image.BICUBIC, expand=True)
-                if len(self._spr) > 192:
-                    self._spr.clear()
-                self._spr[ab] = rot
-            ar = math.radians(ab)
-            x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
-            y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
-            frame.paste(rot, (x, y), rot)
-            box = (max(0, x), max(0, y),
-                   min(W, x + rot.width), min(H, y + rot.height))
-            if box[2] > box[0] and box[3] > box[1]:
-                if self.fgr is not None:
-                    fc = self.fgr.crop(box)
-                    frame.paste(fc, box, fc)
-                self.rects.append(box)
+            prev = self._prev_a[i] if self._prev_a[i] is not None else ab
+            self._prev_a[i] = ab
+
+            def _put(angle, faded):
+                rot = self._spr.get(angle)
+                if rot is None:
+                    rot = self.needle.rotate(angle, resample=Image.BICUBIC, expand=True)
+                    if len(self._spr) > 48:   # RAM cap per active skin
+                        self._spr.clear()
+                    self._spr[angle] = rot
+                img = faded_sprite((id(self), angle), rot) if faded else rot
+                ar = math.radians(angle)
+                x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
+                y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
+                frame.paste(img, (x, y), img)
+                box = (max(0, x), max(0, y),
+                       min(W, x + rot.width), min(H, y + rot.height))
+                if box[2] > box[0] and box[3] > box[1]:
+                    if self.fgr is not None:
+                        fc = self.fgr.crop(box)
+                        frame.paste(fc, box, fc)
+                    self.rects.append(box)
+
+            if abs(ab - prev) > 2.0:   # fast sweep: faded mid-trail, not a "V"
+                _put(round(ab + prev) / 2.0, True)   # snapped to 0.5 deg
+            _put(ab, False)
         return frame.tobytes("raw", "BGRX")
 
 
@@ -1255,17 +1295,27 @@ def timeline_poller() -> None:
 def _warm_caches() -> None:
     """Build the expensive static assets at startup, not on first view
     entry: make_vu_base (3x supersampled faces) alone takes seconds on a
-    Pi 3 and used to stall the first switch into the VU view."""
+    Pi 3 and used to stall the first switch into the VU view.
+
+    Deliberately does NOT preload the Peppy skins: on a 512 MB Pi 3A+
+    holding every skin (base + frame + sprite caches) in RAM caused an
+    OOM/swap storm that froze the whole system, audio included."""
     global VU_BASE, FS_FACE
     try:
         if VU_BASE is None:
             VU_BASE = make_vu_base()
         if FS_FACE is None:
             FS_FACE = make_vu_face_small()
-        for name in SKIN_LIST[1:]:
-            get_skin(name)
     except Exception:
         pass
+
+
+def trim_skins(active: str) -> None:
+    """Drop every skin object except the one on screen: on a 512 MB
+    board even the decoded base/fgr/needle images of a dozen skins are
+    real money. Revisiting a skin reloads it from disk (~0.3 s)."""
+    for n in [k for k in _SKIN_OBJ if k != active]:
+        del _SKIN_OBJ[n]
 
 
 def main() -> None:
@@ -1347,6 +1397,9 @@ def main() -> None:
             elif VIEW["mode"] == 2:
                 name = SKIN_LIST[VU_SKIN["i"] % len(SKIN_LIST)]
                 label = name if now - VU_SKIN["at"] < 1.5 else None
+                if name != LAST_SKIN["n"]:
+                    trim_skins(name)          # free RAM of inactive skins
+                    LAST_SKIN["n"] = name
                 skin = get_skin(name) if name != "amber" else None
                 if skin is not None:
                     fb_out(skin.render(vol, label))
