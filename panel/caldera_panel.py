@@ -1141,7 +1141,6 @@ TL_SHARED = {"tl": None, "at": 0.0}
 COMPANION = "http://localhost:32500/player/playback"
 _CMD_ID = {"n": 100}
 VOL_LOCAL = {"v": None, "at": 0.0}
-DB_PER_DETENT = cfg("encoder", "db_per_detent", 1.0)
 
 
 def companion_cmd(path: str, **params) -> None:
@@ -1247,21 +1246,12 @@ def encoder_worker() -> None:
         tl = TL_SHARED["tl"] or {}
         base = VOL_LOCAL["v"] if (VOL_LOCAL["v"] is not None
                                   and now - VOL_LOCAL["at"] < 3.0) else float(int(tl.get("volume", 50)))
-        # one detent = a fixed dB step on the MEASURED curve
-        # (atten = 55*log10(v/100)); spinning fast accelerates (2x from 4
-        # detents per window, 4x from 8) so reaching mute does not take
-        # a hundred clicks.
-        accel = 4.0 if abs(d) >= 8 else (2.0 if abs(d) >= 4 else 1.0)
-        if base <= 0:
-            v = 1.0 if d > 0 else 0.0
-        else:
-            v = base * (10.0 ** (d * DB_PER_DETENT * accel / VOL_CURVE_DB))
-        v = max(0.0, min(100.0, v))
-        if int(round(v)) == int(round(base)) and d != 0:
-            v = max(0.0, min(100.0, round(base) + (1 if d > 0 else -1)))
+        # one detent = one Caldera volume unit: simple and predictable
+        # (the display shows the real dB of wherever you land)
+        v = max(0, min(100, int(round(base)) + d))
         VOL_LOCAL["v"] = v
         VOL_LOCAL["at"] = now
-        companion_cmd("setParameters", volume=int(round(v)), type="music")
+        companion_cmd("setParameters", volume=v, type="music")
 
 
 def timeline_poller() -> None:
