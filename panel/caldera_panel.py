@@ -12,6 +12,7 @@ Rendering: Pillow + numpy -> framebuffer. No X server involved.
 Configuration: /etc/raspiaudiophile.conf (see the example in pi/etc/).
 """
 
+import fcntl
 import io
 import json
 import math
@@ -106,6 +107,23 @@ def volume_db(vol: int) -> str:
     return f"{-vol_atten_db(vol):.1f} dB"
 
 
+_FB_FD = -1
+FBIO_WAITFORVSYNC = 0x40044620
+
+
+def fb_out(buf: bytes) -> None:
+    """Write a full frame right after vblank so the memcpy outruns the
+    scanout beam — without this the needles tear mid-screen."""
+    global _FB_FD
+    if _FB_FD < 0:
+        _FB_FD = os.open(str(FB), os.O_RDWR)
+    try:
+        fcntl.ioctl(_FB_FD, FBIO_WAITFORVSYNC, 0)
+    except OSError:
+        pass
+    os.pwrite(_FB_FD, buf, 0)
+
+
 def fb_write(img: Image.Image) -> None:
     # firmware fb is 32bpp XRGB little-endian: byte order B,G,R,X
     arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
@@ -114,7 +132,7 @@ def fb_write(img: Image.Image) -> None:
     out[..., 1] = arr[..., 1]
     out[..., 2] = arr[..., 0]
     out[..., 3] = 255
-    FB.write_bytes(out.tobytes())
+    fb_out(out.tobytes())
 
 
 def timeline() -> dict | None:
@@ -1251,7 +1269,7 @@ def main() -> None:
             if state == "playing":
                 t_ms += int((now - tl_at) * 1000)  # interpolate between polls
             if VIEW["mode"] == 1:
-                FB.write_bytes(render_fullscreen_fb(cover, vol, last_key, meta.get("format", ""),
+                fb_out(render_fullscreen_fb(cover, vol, last_key, meta.get("format", ""),
                                                     t_ms, int(tl.get("duration", 0)), levels))
                 last_frame = b""
                 time.sleep(0.04)
@@ -1261,12 +1279,12 @@ def main() -> None:
                 label = name if now - VU_SKIN["at"] < 1.5 else None
                 skin = get_skin(name) if name != "amber" else None
                 if skin is not None:
-                    FB.write_bytes(skin.render(vol, label))
+                    fb_out(skin.render(vol, label))
                 else:
-                    FB.write_bytes(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol,
+                    fb_out(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol,
                                                 meta.get("format", ""), label))
                 last_frame = b""
-                time.sleep(0.025)
+                time.sleep(0.002)   # vsync in fb_out paces the loop now
                 continue
             else:
                 img = render(state or "?", vol, meta, cover,
