@@ -1,0 +1,37 @@
+# RaspiAudiophile panel configuration.
+# Copy to /etc/raspiaudiophile.conf and adjust. Every key is optional:
+# missing keys fall back to the defaults shown here.
+
+[plex]
+# LAN address of your Plex server. Strongly recommended: the Companion
+# timeline sometimes advertises the remote plex.direct route, which is
+# unreachable from inside the LAN (hairpin NAT). Empty = use whatever
+# route the timeline advertises.
+server = http://192.168.1.250:32400
+
+[encoder]
+# BCM GPIO numbers for the KY-040 rotary encoder.
+# Avoid GPIO 5/6 (oscillator gates on DAC+ Pro clone HATs),
+# 18/19/21 (I2S) and 2/3 (I2C).
+gpio_clk = 16
+gpio_dt = 26
+gpio_sw = 13
+
+[volume]
+# dB per volume step shown on screen (vol 100 = 0 dB).
+db_per_step = 0.5
+
+[vu]
+# dBFS level that reads 0 VU on the meters. peppyalsa delivers peak
+# levels, so 0.0 means "digital full scale = 0 VU".
+ref_dbfs = 0.0
+
+[screen]
+# Seconds paused before the idle screen appears.
+paused_to_idle_s = 600
+# Seconds idle before the backlight turns off (touch/encoder/play wakes).
+screen_off_s = 180
+
+[skins]
+# Comma-separated PeppyMeter skins to hide from the VU rotation.
+exclude = grunge, compass, big-bang, ring, royal, vintage, tube, gas, vertical-linear, relax, steam-punk, fantasy, chillout, orange, gold

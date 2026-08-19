@@ -97,12 +97,17 @@ Views (tap the touchscreen to cycle):
    dB readout aligned to the number
 2. **Fullscreen**: cover 480x480 left; right column: mono VU meter (max of
    L/R), format line, big dB
-3. **VU meters**: two amber tungsten-lit faces (supersampled 3x, even tick
-   spacing, orange 0..+1 then red, colored labels), anti-aliased tapered
-   needles with a parallax-cast soft shadow, true VU ballistics (99% in
-   300 ms) plus a mechanical slew limit, ~25 fps via numpy-precomposed
-   frames; format printed on the left face, volume dB on the right;
-   waveform strip below
+3. **VU meters**: the builtin "amber" skin — two amber tungsten-lit faces
+   (supersampled 3x, even tick spacing, orange 0..+1 then red, colored
+   labels), anti-aliased tapered needles with a parallax-cast soft shadow,
+   true VU ballistics (99% in 300 ms) plus a mechanical slew limit,
+   ~25 fps via numpy-precomposed frames; format printed on the left face,
+   volume dB on the right; waveform strip below.
+   Plus **PeppyMeter skins** (circular and linear, vendored in
+   `panel/skins/`, GPLv3, credit project-owner/PeppyMeter): tap the
+   bottom-right/bottom-left strip of the VU view for next/previous skin;
+   the skin name shows for 1.5 s. Hide skins via the `[skins] exclude`
+   config key. Live levels come from the peppyalsa FIFO for all skins.
 
 Encoder: rotate = volume (0.5 dB/detent, optimistic UI echo so the display
 tracks instantly, coalesced Companion sends), click = play/pause, double
@@ -123,12 +128,17 @@ through the retired UCA202's ADC inputs.
 
 ```
 README.md                  this file
+LICENSE                    MIT (skins: GPLv3, see panel/skins/)
+install.sh                 one-shot installer for a fresh Pi
 panel/caldera_panel.py     the panel service
 panel/make_splash.py       boot splash generator
+panel/skins/               PeppyMeter VU skins (GPLv3, vendored)
+panel/assets/              Hi-Res Audio logo
 pi/boot/config.txt         live copy of the Pi's boot config
 pi/boot/cmdline.txt        live copy of the kernel command line
-pi/etc/                    asound.conf, splash/vtunbind units, udev rules
+pi/etc/                    asound.conf, units, udev rules, conf example
 pi/systemd-user/           caldera-music/panel/watchdog user units
+docs/                      upstream bug reports, notes
 remote/                    (future) ESP32-C6 display-remote firmware
 cad/                       (future) Fusion 360 / STL for the case
 ```
@@ -138,26 +148,24 @@ Rule: every change made on the Pi gets synced back here, committed, pushed.
 ## Setup from scratch
 
 1. Flash Raspberry Pi OS Lite (64-bit); customize hostname/user/Wi-Fi/SSH.
-   Apply `pi/boot/config.txt` to the boot partition before first boot.
+   Apply `pi/boot/config.txt` to the boot partition before first boot
+   (or at least `dtoverlay=hifiberry-dacplus,slave`).
    Verify the filesystem got expanded (`df -h /` — a 100% full 2.2G root
    means firstboot never ran; `sudo raspi-config nonint do_expand_rootfs`)
-2. Packages: `sudo apt install python3-numpy python3-pil python3-requests
-   python3-evdev python3-gpiozero python3-lgpio python3-alsaaudio
-   fonts-dejavu-core i2c-tools device-tree-compiler`
-3. Caldera: `curl -sSL
-   https://releases.caldera.homes/music/headless/install.sh | bash`, then
-   `--login --player-name RaspiAudiophile` (plex.tv/link PIN),
-   `loginctl enable-linger $USER`, set `audio.outputDeviceUid=caldera_tap`,
+2. Clone this repo and run `./install.sh`. It installs packages, builds
+   peppyalsa, deploys the ALSA tap, panel, skins, splash and units, and
+   walks through the Caldera Music install.
+3. Link the player: `caldera-music --login --player-name <name>`
+   (plex.tv/link PIN), then set `audio.outputDeviceUid=caldera_tap`,
    `audio.sampleRate=0`, `audio.audioBufferMs=100`
-4. Build peppyalsa (`apt install libfftw3-dev autoconf automake libtool
-   libasound2-dev`, clone project-owner/peppyalsa, `./configure --prefix=/usr
-   && make && sudo make install`). Copy `pi/etc/asound.conf`,
-   `pi/etc/peppyalsa-tmpfiles.conf` to `/etc/tmpfiles.d/`,
-   splash + vtunbind units, backlight udev rule; `pi/systemd-user/*` into
-   `~/.config/systemd/user/`; panel into `~/caldera-panel/`; generate the
-   splash with `make_splash.py`
-5. `systemctl --user enable --now caldera-music caldera-panel
-   caldera-watchdog.timer`; add the user to `video,input,gpio,audio`
+4. Reboot.
+
+## Configuration
+
+Panel settings live in `/etc/raspiaudiophile.conf` (INI; every key
+optional, defaults in `pi/etc/raspiaudiophile.conf.example`): Plex LAN
+address, encoder GPIO pins, dB-per-step, VU reference, screen timeouts
+and the list of VU skins to hide.
 
 ## Caldera channel and upgrades
 
@@ -186,7 +194,7 @@ always-on appliance.
 | Double-speed playback | Master clock mode on the clone HAT — keep `,slave` |
 | Audio dies when touching GPIO wires | You're on GPIO 5/6 (oscillator gates) or 18/19/21 (I2S) — move |
 | Crackle ("prr") | `vcgencmd get_throttled` — any non-zero: fix power first. Under-voltage was the root cause of every mystery in this project's history |
-| Cover/waveform missing | Track served via remote plex.direct route (hairpin NAT): panel prefers the LAN server, check `FALLBACK_SERVER` |
+| Cover/waveform missing | Track served via remote plex.direct route (hairpin NAT): set `[plex] server` in `/etc/raspiaudiophile.conf` to the LAN address |
 | Panel crash loop | `sudo journalctl -u user@1000 | grep caldera-panel`; check python deps and fonts-dejavu-core |
 | Encoder ghost play/pause | Shaft wobble: guards exist; check + is on 3.3V, not 5V |
 | Screen won't wake | `echo 0 | sudo tee /sys/class/backlight/rpi_backlight/bl_power`; panel start now resyncs it |
@@ -200,4 +208,4 @@ always-on appliance.
 - Touch buttons instead of blind view cycling
 - Detachable display remote (Waveshare ESP32-C6-LCD-1.47 + pogo dock)
 - Multi-room: spare Pi 2 fleet, one DAC HAT each, Caldera syncs natively
-- Open-source: extract panel config, installer, LICENSE, wiring diagrams
+- Open-source: wiring diagrams, sanitization pass, then public

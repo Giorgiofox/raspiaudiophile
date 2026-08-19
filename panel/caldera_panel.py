@@ -24,6 +24,28 @@ import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+import configparser as _configparser
+
+_CONF = _configparser.ConfigParser(interpolation=None)
+_CONF.read(["/etc/raspiaudiophile.conf",
+            str(Path.home() / ".config/raspiaudiophile.conf")])
+
+
+def cfg(section: str, key: str, default, cast=None):
+    """Config value from raspiaudiophile.conf, typed like the default."""
+    try:
+        raw = _CONF[section][key]
+    except KeyError:
+        return default
+    cast = cast or type(default)
+    try:
+        if cast is bool:
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+        return cast(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
 FB = Path("/dev/fb0")   # official 7" DSI display, driven by the firmware
 W, H = 800, 480
 COVER = 340      # info view, top-left square
@@ -31,8 +53,8 @@ COVER_FS = 480   # fullscreen view
 TIMELINE_URL = "http://localhost:32500/player/timeline/poll?wait=0&commandID=1"
 PREFS = Path.home() / ".config/caldera-music/preferences.json"
 POLL_S = 1.0
-PAUSED_TO_IDLE_S = 600  # after 10 min paused, show the idle screen
-SCREEN_OFF_S = 180      # idle this long -> backlight off; touch/play wakes
+PAUSED_TO_IDLE_S = cfg("screen", "paused_to_idle_s", 600)
+SCREEN_OFF_S = cfg("screen", "screen_off_s", 180)
 BL_POWER = Path("/sys/class/backlight/rpi_backlight/bl_power")
 SCREEN = {"on": True}
 
@@ -63,7 +85,7 @@ def token() -> str:
     return json.loads(PREFS.read_text())["plex"]["token"]
 
 
-DB_PER_STEP = 0.5  # hi-fi attenuator scale: vol 100 = 0 dB, vol 0 = -50 dB
+DB_PER_STEP = cfg("volume", "db_per_step", 0.5)  # vol 100 = 0 dB, vol 0 = -50 dB
 # TODO: calibrate against Caldera's real curve (UCA202 ADC loopback measure)
 
 
@@ -96,13 +118,14 @@ def timeline() -> dict | None:
     return None
 
 
-FALLBACK_SERVER = "http://192.168.1.250:32400"
+FALLBACK_SERVER = cfg("plex", "server", "")
 
 
 def server_base(tl: dict) -> str:
-    # prefer the LAN server: timeline sometimes advertises the remote
-    # plex.direct route, unreachable from inside the network (hairpin NAT)
-    return FALLBACK_SERVER
+    # prefer the configured LAN server: the timeline sometimes advertises
+    # the remote plex.direct route, unreachable from inside the network
+    # (hairpin NAT)
+    return FALLBACK_SERVER or server_base_alt(tl) or ""
 
 
 def server_base_alt(tl: dict) -> str | None:
@@ -384,7 +407,7 @@ def render_fullscreen(cover: Image.Image | None, vol: int,
 
 
 VU_MIN, VU_MAX = -20.0, 3.0
-VU_REF_DBFS = 0.0    # 0 VU reference vs peppyalsa PEAK levels (old RMS ref was -8)
+VU_REF_DBFS = cfg("vu", "ref_dbfs", 0.0)   # 0 VU vs peppyalsa PEAK levels
 VU_LEVELS = {"l": -60.0, "r": -60.0}
 
 
@@ -778,9 +801,11 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
 # Skin 0 is the builtin amber VU; the rest come from SKIN_DIR/meters.txt.
 SKIN_DIR = Path("/usr/local/share/caldera/skins")
 SKIN_LIST: list[str] = ["amber"]
-SKIN_EXCLUDE = {"grunge", "compass", "big-bang", "ring", "royal", "vintage",
-                "tube", "gas", "vertical-linear", "relax", "steam-punk",
-                "fantasy", "chillout", "orange", "gold"}   # user-vetoed
+_SKIN_EXCLUDE_DEFAULT = ("grunge, compass, big-bang, ring, royal, vintage, "
+                         "tube, gas, vertical-linear, relax, steam-punk, "
+                         "fantasy, chillout, orange, gold")
+SKIN_EXCLUDE = {s.strip() for s in
+                cfg("skins", "exclude", _SKIN_EXCLUDE_DEFAULT).split(",") if s.strip()}
 _SKIN_CFG: dict[str, dict] = {}
 _SKIN_OBJ: dict[str, "PeppySkin"] = {}
 VU_SKIN = {"i": 0, "at": 0.0}
@@ -1041,14 +1066,20 @@ def _wake_screen() -> None:
 
 
 def encoder_worker() -> None:
-    """KY-040 on GPIO 16 (CLK) / 26 (DT) / 13 (SW): volume + transport.\n\n    GPIO 5/6 are NOT free with the clone DAC+ Pro HAT: they gate the\n    onboard oscillators - driving them kills the audio clock."""
+    """KY-040 rotary encoder: volume + transport. Pins from config.
+
+    GPIO 5/6 are NOT free with the clone DAC+ Pro HAT: they gate the
+    onboard oscillators - driving them kills the audio clock."""
     try:
         from gpiozero import RotaryEncoder, Button
     except ImportError:
         return
     try:
-        enc = RotaryEncoder(16, 26, max_steps=0, wrap=False)
-        btn = Button(13, pull_up=True, bounce_time=0.03, hold_time=0.8)
+        enc = RotaryEncoder(cfg("encoder", "gpio_clk", 16),
+                            cfg("encoder", "gpio_dt", 26),
+                            max_steps=0, wrap=False)
+        btn = Button(cfg("encoder", "gpio_sw", 13),
+                     pull_up=True, bounce_time=0.03, hold_time=0.8)
     except Exception:
         return
 

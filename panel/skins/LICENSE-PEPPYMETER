@@ -1,0 +1,9 @@
+The skin images and meters.txt in this directory come from the PeppyMeter
+project by peppy.player@gmail.com:
+
+    https://github.com/project-owner/PeppyMeter
+
+They are distributed under the GNU General Public License v3, the same
+license as the PeppyMeter project. Only the 800x480 circular and linear
+skins are vendored here; the rendering engine in this repository is an
+independent implementation.
