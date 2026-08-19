@@ -567,10 +567,21 @@ def needle_sprite(kind: str, angle: float, cx, py, tip_x, tip_y, **kw):
     return spr
 
 
-def paste_sprite(frame: Image.Image, spr, ox: int = 0, oy: int = 0):
-    """Paste a cached sprite; returns the touched PIL box (x0, y0, x1, y1)."""
+def paste_sprite(frame: Image.Image, spr, ox: int = 0, oy: int = 0, clip=None):
+    """Paste a cached sprite; returns the touched PIL box (x0, y0, x1, y1).
+    clip=(x0, y0, x1, y1) confines the paste (e.g. to the meter face, so
+    the needle tail cannot spill over the waveform below)."""
     img, sx0, sy0 = spr
     x0, y0 = sx0 + ox, sy0 + oy
+    if clip is not None:
+        cx0, cy0, cx1, cy1 = clip
+        ix0, iy0 = max(x0, cx0), max(y0, cy0)
+        ix1 = min(x0 + img.width, cx1)
+        iy1 = min(y0 + img.height, cy1)
+        if ix1 <= ix0 or iy1 <= iy0:
+            return (0, 0, 0, 0)
+        img = img.crop((ix0 - x0, iy0 - y0, ix1 - x0, iy1 - y0))
+        x0, y0 = ix0, iy0
     frame.paste(img, (x0, y0), img)
     return (max(0, x0), max(0, y0),
             min(W, x0 + img.width), min(H, y0 + img.height))
@@ -764,7 +775,9 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
     tip_y = py - FS_R_NEEDLE * math.cos(a)
     spr = needle_sprite("fs", a, cx, py, tip_x, tip_y, w0=2.2, w1=0.3,
                         color=(12, 20, 28), sh_dx=4.5 * math.sin(a), sh_dy=4.5)
-    FS_WORK["rect"] = paste_sprite(frame, spr, ox=FS_FACE_X, oy=FS_FACE_Y)
+    FS_WORK["rect"] = paste_sprite(frame, spr, ox=FS_FACE_X, oy=FS_FACE_Y,
+                                   clip=(FS_FACE_X, FS_FACE_Y,
+                                         FS_FACE_X + FS_FACE_W, FS_FACE_Y + FS_FACE_H))
     return frame.tobytes("raw", "BGRX")
 
 
@@ -859,7 +872,8 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
         off = VU_REG_Y0 - VU_FACE_Y
         spr = needle_sprite("vu", a, cx, py - off, tip_x, tip_y - off,
                             color=(8, 16, 25), sh_dx=5.5 * math.sin(a), sh_dy=5.0)
-        wk["rects"].append(paste_sprite(frame, spr, ox=mx, oy=VU_REG_Y0))
+        wk["rects"].append(paste_sprite(frame, spr, ox=mx, oy=VU_REG_Y0,
+                                        clip=(mx, VU_REG_Y0, mx + VU_MW, VU_REG_Y1)))
     return frame.tobytes("raw", "BGRX")
 
 
