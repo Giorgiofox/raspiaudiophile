@@ -101,6 +101,13 @@ def vol_atten_db(vol: int) -> float:
     return max(0.0, -VOL_CURVE_DB * math.log10(vol / 100.0))
 
 
+def vu_comp_db(vol) -> float:
+    """Meter compensation: add back Caldera's attenuation so the needles
+    show source level. At mute there is nothing to compensate — without
+    this guard the +120 dB mute figure pegged the needles full scale."""
+    return vol_atten_db(vol) if vol > 0 else 0.0
+
+
 def volume_db(vol: int) -> str:
     if vol <= 0:
         return "MUTE"
@@ -748,7 +755,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
-    atten = vol_atten_db(vol)
+    atten = vu_comp_db(vol)
     target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
     FS_DISP["m"] = vu_step(FS_DISP["m"], target, dt)
     a = _vu_angle(FS_DISP["m"])
@@ -841,7 +848,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
     _VU_LAST_T["t"] = now
     for mx, ch in ((8, "l"), (404, "r")):
-        atten = vol_atten_db(vol)
+        atten = vu_comp_db(vol)
         target = VU_LEVELS[ch] - VU_REF_DBFS + atten
         VU_DISP[ch] = vu_step(VU_DISP[ch], target, dt)
         a = _vu_angle(VU_DISP[ch])
@@ -938,7 +945,7 @@ class PeppySkin:
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
-        atten = vol_atten_db(vol)
+        atten = vu_comp_db(vol)
         # persistent frame: only the previous needle patches are restored
         if self.frame is None or label != self._label:
             self.frame = self.base.copy()
@@ -1028,7 +1035,7 @@ class PeppyLinearSkin:
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
-        atten = vol_atten_db(vol)
+        atten = vu_comp_db(vol)
         if self.frame is None or label != self._label:
             self.frame = self.base.copy()
             if label:
@@ -1134,6 +1141,7 @@ TL_SHARED = {"tl": None, "at": 0.0}
 COMPANION = "http://localhost:32500/player/playback"
 _CMD_ID = {"n": 100}
 VOL_LOCAL = {"v": None, "at": 0.0}
+DB_PER_DETENT = cfg("encoder", "db_per_detent", 1.0)
 
 
 def companion_cmd(path: str, **params) -> None:
@@ -1239,13 +1247,15 @@ def encoder_worker() -> None:
         tl = TL_SHARED["tl"] or {}
         base = VOL_LOCAL["v"] if (VOL_LOCAL["v"] is not None
                                   and now - VOL_LOCAL["at"] < 3.0) else float(int(tl.get("volume", 50)))
-        # one detent = 0.5 dB on the MEASURED curve (atten = 55*log10(v/100)),
-        # so the step size in volume units adapts: ~2 units near 100, 1 unit
-        # around 50; below ~45 Caldera's 1-unit floor is coarser than 0.5 dB.
+        # one detent = a fixed dB step on the MEASURED curve
+        # (atten = 55*log10(v/100)); spinning fast accelerates (2x from 4
+        # detents per window, 4x from 8) so reaching mute does not take
+        # a hundred clicks.
+        accel = 4.0 if abs(d) >= 8 else (2.0 if abs(d) >= 4 else 1.0)
         if base <= 0:
             v = 1.0 if d > 0 else 0.0
         else:
-            v = base * (10.0 ** (d * 0.5 / VOL_CURVE_DB))
+            v = base * (10.0 ** (d * DB_PER_DETENT * accel / VOL_CURVE_DB))
         v = max(0.0, min(100.0, v))
         if int(round(v)) == int(round(base)) and d != 0:
             v = max(0.0, min(100.0, round(base) + (1 if d > 0 else -1)))
