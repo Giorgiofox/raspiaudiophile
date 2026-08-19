@@ -169,7 +169,9 @@ def fetch_meta(tl: dict) -> dict:
         "title": track.get("title", "?") if track is not None else "?",
         "artist": track.get("grandparentTitle", "") if track is not None else "",
         "album": track.get("parentTitle", "") if track is not None else "",
-        "thumb": track.get("thumb", "") if track is not None else "",
+        # some tracks carry no own thumb: fall back to album then artist art
+        "thumb": (track.get("thumb") or track.get("parentThumb")
+                  or track.get("grandparentThumb") or "") if track is not None else "",
         "format": fmt,
         "stream_id": stream_id,
     }
