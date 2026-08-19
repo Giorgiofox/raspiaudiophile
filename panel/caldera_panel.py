@@ -569,22 +569,6 @@ def paste_sprite(frame: Image.Image, spr, ox: int = 0, oy: int = 0):
             min(W, x0 + img.width), min(H, y0 + img.height))
 
 
-_FADED = {}
-
-
-def faded_sprite(key, img: Image.Image, factor: float = 0.45) -> Image.Image:
-    """Cached copy of an RGBA sprite with its alpha scaled down — used as
-    the motion-blur trail when the needle jumps a lot in one frame (a fast
-    needle drawn crisp at two spots reads as TWO needles, a 'V')."""
-    f = _FADED.get(key)
-    if f is None:
-        f = img.copy()
-        f.putalpha(f.getchannel("A").point(lambda v: int(v * factor)))
-        if len(_FADED) > 96:
-            _FADED.clear()
-        _FADED[key] = f
-    return f
-
 SS = 3  # supersampling factor for static faces
 
 
@@ -788,12 +772,11 @@ VU_TXT_W, VU_TXT_H = 170, 46
 VU_TXT_X = 404 + VU_MW - VU_TXT_W - 10
 VU_TXT_Y = VU_FACE_Y + VU_MH - VU_TXT_H - 8
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
-VU_PREV_A: dict = {}
-VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.30   # mechanical limit: full scale in 300 ms
+VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.45   # mechanical limit: full scale in 450 ms (heavier needle: this LCD ghosts fast sweeps)
 
 
 def vu_step(disp: float, target: float, dt: float) -> float:
-    step = (max(VU_MIN, min(VU_MAX, target)) - disp) * min(1.0, dt / 0.05)
+    step = (max(VU_MIN, min(VU_MAX, target)) - disp) * min(1.0, dt / 0.08)
     lim = VU_SLEW_DB_S * dt
     return disp + max(-lim, min(lim, step))
 _VU_LAST_T = {"t": 0.0}
@@ -867,17 +850,6 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
         tip_x = cx + VU_R_NEEDLE * math.sin(a)
         tip_y = py - VU_R_NEEDLE * math.cos(a)
         off = VU_REG_Y0 - VU_FACE_Y
-        prev = VU_PREV_A.get(ch, a)
-        VU_PREV_A[ch] = a
-        if abs(a - prev) > 0.03:      # fast sweep: draw a faded trail at the
-            am = (a + prev) / 2.0     # midpoint so it reads as blur, not "V"
-            mtx = cx + VU_R_NEEDLE * math.sin(am)
-            mty = py - VU_R_NEEDLE * math.cos(am)
-            ms = needle_sprite("vu", am, cx, py - off, mtx, mty - off,
-                               color=(8, 16, 25), sh_dx=5.5 * math.sin(am), sh_dy=5.0)
-            fs_img = faded_sprite(("vu", int(round(am * 300))), ms[0])
-            wk["rects"].append(paste_sprite(frame, (fs_img, ms[1], ms[2]),
-                                            ox=mx, oy=VU_REG_Y0))
         spr = needle_sprite("vu", a, cx, py - off, tip_x, tip_y - off,
                             color=(8, 16, 25), sh_dx=5.5 * math.sin(a), sh_dy=5.0)
         wk["rects"].append(paste_sprite(frame, spr, ox=mx, oy=VU_REG_Y0))
@@ -961,7 +933,6 @@ class PeppySkin:
         self.rects: list = []
         self._label = object()
         self._spr: dict = {}    # quantized angle -> rotated sprite
-        self._prev_a = [None] * len(self.origins)
 
     def render(self, vol: int, label: "str | None" = None):
         now = time.monotonic()
@@ -985,38 +956,29 @@ class PeppySkin:
             else:
                 db = VU_LEVELS["l" if i == 0 else "r"] + atten
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
-            step = (v - self.disp[i]) * min(1.0, dt / 0.05)
-            lim = (100.0 / 0.30) * dt           # mechanical slew: full scale in 300 ms
+            step = (v - self.disp[i]) * min(1.0, dt / 0.08)
+            lim = (100.0 / 0.45) * dt           # heavier needle: this LCD ghosts fast sweeps
             self.disp[i] += max(-lim, min(lim, step))
             start, stop = self.angles[i]
             a = start + (stop - start) * self.disp[i] / 100.0
             ab = round(a * 2) / 2.0            # 0.5 degree sprite buckets
-            prev = self._prev_a[i] if self._prev_a[i] is not None else ab
-            self._prev_a[i] = ab
-
-            def _put(angle, faded):
-                rot = self._spr.get(angle)
-                if rot is None:
-                    rot = self.needle.rotate(angle, resample=Image.BICUBIC, expand=True)
-                    if len(self._spr) > 48:   # RAM cap per active skin
-                        self._spr.clear()
-                    self._spr[angle] = rot
-                img = faded_sprite((id(self), angle), rot) if faded else rot
-                ar = math.radians(angle)
-                x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
-                y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
-                frame.paste(img, (x, y), img)
-                box = (max(0, x), max(0, y),
-                       min(W, x + rot.width), min(H, y + rot.height))
-                if box[2] > box[0] and box[3] > box[1]:
-                    if self.fgr is not None:
-                        fc = self.fgr.crop(box)
-                        frame.paste(fc, box, fc)
-                    self.rects.append(box)
-
-            if abs(ab - prev) > 2.0:   # fast sweep: faded mid-trail, not a "V"
-                _put(round(ab + prev) / 2.0, True)   # snapped to 0.5 deg
-            _put(ab, False)
+            rot = self._spr.get(ab)
+            if rot is None:
+                rot = self.needle.rotate(ab, resample=Image.BICUBIC, expand=True)
+                if len(self._spr) > 48:   # RAM cap per active skin
+                    self._spr.clear()
+                self._spr[ab] = rot
+            ar = math.radians(ab)
+            x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
+            y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
+            frame.paste(rot, (x, y), rot)
+            box = (max(0, x), max(0, y),
+                   min(W, x + rot.width), min(H, y + rot.height))
+            if box[2] > box[0] and box[3] > box[1]:
+                if self.fgr is not None:
+                    fc = self.fgr.crop(box)
+                    frame.paste(fc, box, fc)
+                self.rects.append(box)
         return frame.tobytes("raw", "BGRX")
 
 
@@ -1082,8 +1044,8 @@ class PeppyLinearSkin:
         for i, (x, y, ind, left) in enumerate(self.ch):
             db = VU_LEVELS["l" if i == 0 else "r"] + atten
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
-            step = (v - self.disp[i]) * min(1.0, dt / 0.05)
-            lim = (100.0 / 0.30) * dt
+            step = (v - self.disp[i]) * min(1.0, dt / 0.08)
+            lim = (100.0 / 0.45) * dt
             self.disp[i] += max(-lim, min(lim, step))
             n = min(int(self.disp[i] / self.step), len(self.masks) - 1)
             w = max(1, self.masks[n])
@@ -1276,11 +1238,20 @@ def encoder_worker() -> None:
         now = time.monotonic()
         tl = TL_SHARED["tl"] or {}
         base = VOL_LOCAL["v"] if (VOL_LOCAL["v"] is not None
-                                  and now - VOL_LOCAL["at"] < 3.0) else int(tl.get("volume", 50))
-        v = max(0, min(100, base + d))
+                                  and now - VOL_LOCAL["at"] < 3.0) else float(int(tl.get("volume", 50)))
+        # one detent = 0.5 dB on the MEASURED curve (atten = 55*log10(v/100)),
+        # so the step size in volume units adapts: ~2 units near 100, 1 unit
+        # around 50; below ~45 Caldera's 1-unit floor is coarser than 0.5 dB.
+        if base <= 0:
+            v = 1.0 if d > 0 else 0.0
+        else:
+            v = base * (10.0 ** (d * 0.5 / VOL_CURVE_DB))
+        v = max(0.0, min(100.0, v))
+        if int(round(v)) == int(round(base)) and d != 0:
+            v = max(0.0, min(100.0, round(base) + (1 if d > 0 else -1)))
         VOL_LOCAL["v"] = v
         VOL_LOCAL["at"] = now
-        companion_cmd("setParameters", volume=v, type="music")
+        companion_cmd("setParameters", volume=int(round(v)), type="music")
 
 
 def timeline_poller() -> None:
@@ -1407,7 +1378,7 @@ def main() -> None:
                     fb_out(render_vu_fb(levels, t_ms, int(tl.get("duration", 0)), vol,
                                                 meta.get("format", ""), label))
                 last_frame = b""
-                time.sleep(0.002)   # vsync in fb_out paces the loop now
+                time.sleep(0.028)   # ~20 fps: this LCD needs ~45 ms between needle positions or it ghosts doubles
                 continue
             else:
                 img = render(state or "?", vol, meta, cover,
