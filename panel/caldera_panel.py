@@ -126,13 +126,7 @@ def fb_out(buf: bytes) -> None:
 
 def fb_write(img: Image.Image) -> None:
     # firmware fb is 32bpp XRGB little-endian: byte order B,G,R,X
-    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
-    out = np.empty((H, W, 4), dtype=np.uint8)
-    out[..., 0] = arr[..., 2]
-    out[..., 1] = arr[..., 1]
-    out[..., 2] = arr[..., 0]
-    out[..., 3] = 255
-    fb_out(out.tobytes())
+    fb_out(img.convert("RGB").tobytes("raw", "BGRX"))
 
 
 def timeline() -> dict | None:
@@ -511,34 +505,68 @@ def _amber_face(w: int, h: int) -> Image.Image:
     return Image.fromarray(np.dstack([r, g_, b]))
 
 
-def draw_needle_aa(arr_bgr, cx, py, tip_x, tip_y, w0=2.8, w1=0.35,
-                   color=(12, 20, 28), shadow=True, sh_dx=5.0, sh_dy=6.0):
-    """Anti-aliased tapered needle with a soft offset lamp shadow (BGR array)."""
-    h, w = arr_bgr.shape[:2]
-    x0 = max(0, int(min(cx, tip_x)) - 12); x1 = min(w, int(max(cx, tip_x)) + 13)
-    y0 = max(0, int(min(py, tip_y)) - 12); y1 = min(h, int(max(py, tip_y)) + 14)
-    if x1 <= x0 or y1 <= y0:
-        return
+def _gen_needle_sprite(cx, py, tip_x, tip_y, w0=2.8, w1=0.35,
+                       color=(12, 20, 28), sh_dx=5.0, sh_dy=6.0):
+    """Pre-composited needle+shadow RGBA sprite.
+
+    Returns (Image, x0, y0) to paste at (x0, y0). The cast shadow (the
+    needle alpha shifted by sh_dx/sh_dy, 18% black) is folded into the
+    same alpha so a single paste draws both."""
+    m = 14
+    x0 = int(min(cx, tip_x)) - m
+    x1 = int(max(cx, tip_x)) + m + 1
+    y0 = int(min(py, tip_y)) - m
+    y1 = int(max(py, tip_y)) + m + 2
     yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
     dx, dy = tip_x - cx, tip_y - py
     L2 = float(dx * dx + dy * dy) or 1.0
     t = np.clip(((xx - cx) * dx + (yy - py) * dy) / L2, 0.0, 1.0)
-    px = cx + t * dx
-    pyl = py + t * dy
+    ex = xx - (cx + t * dx)
+    ey = yy - (py + t * dy)
+    dist = np.sqrt(ex * ex + ey * ey)
     width = w0 + (w1 - w0) * t
-    sub = arr_bgr[y0:y1, x0:x1, :3].astype(np.float32)
-    if shadow:
-        # distance from the pixel to the SHIFTED needle line (true cast shadow)
-        xs, ys = xx - sh_dx, yy - sh_dy
-        t2 = np.clip(((xs - cx) * dx + (ys - py) * dy) / L2, 0.0, 1.0)
-        dist_sh = np.hypot(xs - (cx + t2 * dx), ys - (py + t2 * dy))
-        w_sh = w0 + (w1 - w0) * t2
-        a_sh = np.clip((w_sh + 3.0 - dist_sh) / 3.0, 0.0, 1.0)[..., None] * 0.45
-        sub = sub * (1.0 - a_sh * 0.40)
-    dist = np.hypot(xx - px, yy - pyl)
-    a = np.clip((width + 1.1 - dist) / 1.1, 0.0, 1.0)[..., None]
-    sub = sub * (1 - a) + np.array(color, np.float32) * a
-    arr_bgr[y0:y1, x0:x1, :3] = sub.astype(np.uint8)
+    a = np.clip((width + 1.1 - dist) / 1.1, 0.0, 1.0)
+    sh = np.zeros_like(a)
+    sy, sx = int(round(sh_dy)), int(round(sh_dx))
+    hh, ww = a.shape
+    ty0, ty1 = max(0, sy), min(hh, hh + sy)
+    tx0, tx1 = max(0, sx), min(ww, ww + sx)
+    if ty1 > ty0 and tx1 > tx0:
+        sh[ty0:ty1, tx0:tx1] = a[ty0 - sy:ty1 - sy, tx0 - sx:tx1 - sx]
+    a_sh = sh * 0.18
+    out_a = a + a_sh * (1.0 - a)          # shadow under the needle
+    colf = np.array((color[2], color[1], color[0]), np.float32)  # BGR -> RGB
+    rgb = np.zeros(a.shape + (3,), np.float32)
+    safe = out_a > 0.002
+    rgb[safe] = colf[None, :] * (a[safe] / out_a[safe])[:, None]
+    rgba = np.empty(a.shape + (4,), np.uint8)
+    rgba[..., :3] = rgb.astype(np.uint8)
+    rgba[..., 3] = (out_a * 255.0).astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA"), x0, y0
+
+
+_NEEDLE_LRU: dict = {}
+
+
+def needle_sprite(kind: str, angle: float, cx, py, tip_x, tip_y, **kw):
+    """LRU cache of PIL needle sprites, quantized to ~0.11 degrees."""
+    key = (kind, int(round(angle * 500)))
+    spr = _NEEDLE_LRU.get(key)
+    if spr is None:
+        spr = _gen_needle_sprite(cx, py, tip_x, tip_y, **kw)
+        if len(_NEEDLE_LRU) > 320:
+            _NEEDLE_LRU.clear()
+        _NEEDLE_LRU[key] = spr
+    return spr
+
+
+def paste_sprite(frame: Image.Image, spr, ox: int = 0, oy: int = 0):
+    """Paste a cached sprite; returns the touched PIL box (x0, y0, x1, y1)."""
+    img, sx0, sy0 = spr
+    x0, y0 = sx0 + ox, sy0 + oy
+    frame.paste(img, (x0, y0), img)
+    return (max(0, x0), max(0, y0),
+            min(W, x0 + img.width), min(H, y0 + img.height))
 
 SS = 3  # supersampling factor for static faces
 
@@ -660,7 +688,8 @@ def make_vu_face_small() -> Image.Image:
 
 
 FS_FACE: Image.Image | None = None
-FS_CACHE: dict = {"arr": None, "key": None}
+FS_CACHE: dict = {"img": None, "key": None}
+FS_WORK: dict = {"img": None, "src": None, "rect": None}
 FS_DISP = {"m": VU_MIN}
 
 
@@ -673,7 +702,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
     if dur_ms > 0 and levels is not None:
         fs_played = max(1, int(296 * min(t_ms / dur_ms, 1.0)))
     ck = (key, vol, fmt, fs_played // 4)
-    if FS_CACHE["arr"] is None or FS_CACHE["key"] != ck:
+    if FS_CACHE["img"] is None or FS_CACHE["key"] != ck:
         base = Image.new("RGB", (W, H), (0, 0, 0))
         d = ImageDraw.Draw(base)
         if cover is not None:
@@ -706,9 +735,15 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
         d.text((x0, 466), main, font=f_num, fill=FG, anchor="ls")
         if unit:
             d.text((x0 + wm, 466), unit, font=F_FMT, fill=FG, anchor="ls")
-        FS_CACHE["arr"] = _to_xrgb(base)
+        FS_CACHE["img"] = base
         FS_CACHE["key"] = ck
-    arr = FS_CACHE["arr"].copy()
+    src = FS_CACHE["img"]
+    if FS_WORK["src"] is not src:
+        FS_WORK.update(img=src.copy(), src=src, rect=None)
+    frame = FS_WORK["img"]
+    if FS_WORK["rect"]:
+        box = FS_WORK["rect"]
+        frame.paste(src.crop(box), box)
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
@@ -719,14 +754,16 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
     cx, py = FS_FACE_W // 2, FS_PIVOT_Y
     tip_x = cx + FS_R_NEEDLE * math.sin(a)
     tip_y = py - FS_R_NEEDLE * math.cos(a)
-    view = arr[FS_FACE_Y:FS_FACE_Y + FS_FACE_H, FS_FACE_X:FS_FACE_X + FS_FACE_W]
-    draw_needle_aa(view, cx, py, tip_x, tip_y, w0=2.2, w1=0.3,
-                   color=(12, 20, 28), sh_dx=4.5 * math.sin(a), sh_dy=4.5)
-    return arr.tobytes()
+    spr = needle_sprite("fs", a, cx, py, tip_x, tip_y, w0=2.2, w1=0.3,
+                        color=(12, 20, 28), sh_dx=4.5 * math.sin(a), sh_dy=4.5)
+    FS_WORK["rect"] = paste_sprite(frame, spr, ox=FS_FACE_X, oy=FS_FACE_Y)
+    return frame.tobytes("raw", "BGRX")
 
 
 VU_BASE: Image.Image | None = None
-VU_CACHE: dict = {"arr": None, "played": -1}
+VU_CACHE: dict = {"img": None, "played": -1}
+VU_WORK: dict = {"static": None, "img": None, "src": None,
+                 "vol": None, "fmt": None, "label": None, "rects": []}
 VU_VOLTXT = {"vol": None, "arr": None}
 VU_FMTTXT = {"fmt": None, "arr": None}
 VU_FMT_X = 8 + 10
@@ -745,19 +782,13 @@ _VU_LAST_T = {"t": 0.0}
 VU_REG_Y0, VU_REG_Y1 = VU_FACE_Y, VU_FACE_Y + VU_MH   # needle sweep = whole face
 
 
-def _to_xrgb(img: Image.Image) -> np.ndarray:
-    a = np.asarray(img.convert("RGB"), dtype=np.uint8)
-    out = np.empty((a.shape[0], a.shape[1], 4), dtype=np.uint8)
-    out[..., 0] = a[..., 2]
-    out[..., 1] = a[..., 1]
-    out[..., 2] = a[..., 0]
-    out[..., 3] = 255
-    return out
+F_VOL_S = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 26)
+F_FMT_S = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
 
 
 def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
                  label: "str | None" = None) -> bytes:
-    """Full-frame XRGB bytes; only the needle regions are redrawn per call."""
+    """Full-frame BGRX bytes; only the needle patches are redrawn per call."""
     global VU_BASE
     if VU_BASE is None:
         VU_BASE = make_vu_base()
@@ -772,39 +803,38 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
             base.paste(levels["off"].resize((WAVE_COLS, hm * 2 + 1)), (16, yc2 - hm))
             on = levels["on"].resize((WAVE_COLS, hm * 2 + 1))
             base.paste(on.crop((0, 0, pl, hm * 2 + 1)), (16, yc2 - hm))
-        VU_CACHE["arr"] = _to_xrgb(base)
+        VU_CACHE["img"] = base
         VU_CACHE["played"] = pl
         VU_CACHE["busy"] = False
 
-    if VU_CACHE["arr"] is None:
+    if VU_CACHE["img"] is None:
         _rebuild(played)                      # first time: synchronous
     elif abs(played - VU_CACHE["played"]) >= 6 and not VU_CACHE.get("busy"):
         VU_CACHE["busy"] = True
         threading.Thread(target=_rebuild, args=(played,), daemon=True).start()
-    arr = VU_CACHE["arr"].copy()
 
-    if VU_VOLTXT["vol"] != vol:
-        crop = VU_BASE.crop((VU_TXT_X, VU_TXT_Y,
-                             VU_TXT_X + VU_TXT_W, VU_TXT_Y + VU_TXT_H)).copy()
-        dd = ImageDraw.Draw(crop)
-        f_vol_s = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 26)
-        dd.text((VU_TXT_W - 4, VU_TXT_H - 8), volume_db(vol),
-                font=f_vol_s, fill=(15, 12, 8), anchor="rs")
-        VU_VOLTXT["arr"] = _to_xrgb(crop)
-        VU_VOLTXT["vol"] = vol
-    arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_TXT_X:VU_TXT_X + VU_TXT_W] = VU_VOLTXT["arr"]
-
-    if fmt and VU_FMTTXT["fmt"] != fmt:
-        fw = 366
-        crop = VU_BASE.crop((VU_FMT_X, VU_TXT_Y,
-                             VU_FMT_X + fw, VU_TXT_Y + VU_TXT_H)).copy()
-        dd = ImageDraw.Draw(crop)
-        f_fmt_small = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 22)
-        dd.text((4, VU_TXT_H - 8), fmt, font=f_fmt_small, fill=(15, 12, 8), anchor="ls")
-        VU_FMTTXT["arr"] = _to_xrgb(crop)
-        VU_FMTTXT["fmt"] = fmt
-    if VU_FMTTXT["arr"] is not None:
-        arr[VU_TXT_Y:VU_TXT_Y + VU_TXT_H, VU_FMT_X:VU_FMT_X + 366] = VU_FMTTXT["arr"]
+    # Static frame (base + waveform + texts + label) rebuilt only on change;
+    # per frame the working copy just restores the previous needle patches.
+    src = VU_CACHE["img"]
+    wk = VU_WORK
+    if (wk["static"] is None or wk["src"] is not src
+            or wk["vol"] != vol or wk["fmt"] != fmt or wk["label"] != label):
+        static = src.copy()
+        dd = ImageDraw.Draw(static)
+        dd.text((VU_TXT_X + VU_TXT_W - 4, VU_TXT_Y + VU_TXT_H - 8), volume_db(vol),
+                font=F_VOL_S, fill=(15, 12, 8), anchor="rs")
+        if fmt:
+            dd.text((VU_FMT_X + 4, VU_TXT_Y + VU_TXT_H - 8), fmt,
+                    font=F_FMT_S, fill=(15, 12, 8), anchor="ls")
+        if label:
+            skin_label_overlay(static, label)
+        wk.update(static=static, img=static.copy(), src=src,
+                  vol=vol, fmt=fmt, label=label, rects=[])
+    frame = wk["img"]
+    static = wk["static"]
+    for box in wk["rects"]:
+        frame.paste(static.crop(box), box)
+    wk["rects"] = []
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
@@ -818,13 +848,11 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
         py = VU_PIVOT_Y
         tip_x = cx + VU_R_NEEDLE * math.sin(a)
         tip_y = py - VU_R_NEEDLE * math.cos(a)
-        view = arr[VU_REG_Y0:VU_REG_Y1, mx:mx + VU_MW]
         off = VU_REG_Y0 - VU_FACE_Y
-        draw_needle_aa(view, cx, py - off, tip_x, tip_y - off, color=(8, 16, 25),
-                       sh_dx=5.5 * math.sin(a), sh_dy=5.0)
-    if label:
-        skin_label_overlay(arr, label)
-    return arr.tobytes()
+        spr = needle_sprite("vu", a, cx, py - off, tip_x, tip_y - off,
+                            color=(8, 16, 25), sh_dx=5.5 * math.sin(a), sh_dy=5.0)
+        wk["rects"].append(paste_sprite(frame, spr, ox=mx, oy=VU_REG_Y0))
+    return frame.tobytes("raw", "BGRX")
 
 
 # ---------------------------------------------------------------- Peppy skins
@@ -862,20 +890,6 @@ def load_skin_configs() -> None:
         SKIN_LIST.append(name)
 
 
-def _blend_rgba(arr: np.ndarray, src: np.ndarray, x: int, y: int) -> None:
-    """Alpha-blend an RGBA uint16 array into the XRGB framebuffer array."""
-    h, w = src.shape[:2]
-    x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(W, x + w), min(H, y + h)
-    if x1 <= x0 or y1 <= y0:
-        return
-    s = src[y0 - y:y1 - y, x0 - x:x1 - x]
-    al = s[..., 3:4]
-    dst = arr[y0:y1, x0:x1]
-    dst[..., :3] = ((s[..., (2, 1, 0)] * al
-                     + dst[..., :3].astype(np.uint16) * (255 - al)) // 255).astype(np.uint8)
-
-
 class PeppySkin:
     """One circular PeppyMeter skin. Needle image points up, pivot sits
     `distance` px below the image center, rotation is CCW-positive from
@@ -886,17 +900,17 @@ class PeppySkin:
         if bgr.size != (W, H):
             bgr = bgr.resize((W, H))
         self.needle = Image.open(SKIN_DIR / cfg["indicator.filename"]).convert("RGBA")
-        self.fgr16 = None
+        self.fgr = None
         fgr_name = cfg.get("fgr.filename", "").strip()
         if fgr_name and (SKIN_DIR / fgr_name).exists():
             fgr = Image.open(SKIN_DIR / fgr_name).convert("RGBA")
             if fgr.size != (W, H):
                 fgr = fgr.resize((W, H))
-            # fgr is baked into the base; per frame it only needs re-blending
+            # fgr is baked into the base; per frame it only needs re-pasting
             # where the needle was drawn on top of it
-            self.fgr16 = np.asarray(fgr, dtype=np.uint16)
+            self.fgr = fgr
             bgr = Image.alpha_composite(bgr.convert("RGBA"), fgr).convert("RGB")
-        self.base = np.ascontiguousarray(_to_xrgb(bgr))
+        self.base = bgr
         self.dist = float(cfg["distance"])
         # angles may be global (start.angle) or per channel (left.start.angle)
         if int(cfg.get("channels", 2)) == 1:
@@ -913,13 +927,27 @@ class PeppySkin:
             ]
         self.disp = [0.0] * len(self.origins)   # smoothed linear 0..100
         self._last_t = 0.0
+        self.frame = None
+        self.rects: list = []
+        self._label = object()
+        self._spr: dict = {}    # quantized angle -> precomposited sprite
 
-    def render(self, vol: int, label: "str | None" = None) -> bytes:
+    def render(self, vol: int, label: "str | None" = None):
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
         atten = vol_atten_db(vol)
-        arr = self.base.copy()
+        # persistent frame: only the previous needle patches are restored
+        if self.frame is None or label != self._label:
+            self.frame = self.base.copy()
+            if label:
+                skin_label_overlay(self.frame, label)
+            self._label = label
+            self.rects = []
+        frame = self.frame
+        for box in self.rects:
+            frame.paste(self.base.crop(box), box)
+        self.rects = []
         for i, (ox, oy) in enumerate(self.origins):
             if len(self.origins) == 1:
                 db = max(VU_LEVELS["l"], VU_LEVELS["r"]) + atten
@@ -931,19 +959,25 @@ class PeppySkin:
             self.disp[i] += max(-lim, min(lim, step))
             start, stop = self.angles[i]
             a = start + (stop - start) * self.disp[i] / 100.0
-            rot = self.needle.rotate(a, resample=Image.BICUBIC, expand=True)
-            ar = math.radians(a)
+            ab = round(a * 2) / 2.0            # 0.5 degree sprite buckets
+            rot = self._spr.get(ab)
+            if rot is None:
+                rot = self.needle.rotate(ab, resample=Image.BICUBIC, expand=True)
+                if len(self._spr) > 192:
+                    self._spr.clear()
+                self._spr[ab] = rot
+            ar = math.radians(ab)
             x = int(ox - self.dist * math.sin(ar) - rot.width / 2)
             y = int(oy - self.dist * math.cos(ar) - rot.height / 2)
-            _blend_rgba(arr, np.asarray(rot, dtype=np.uint16), x, y)
-            if self.fgr16 is not None:
-                x0, y0 = max(0, x), max(0, y)
-                x1, y1 = min(W, x + rot.width), min(H, y + rot.height)
-                if x1 > x0 and y1 > y0:
-                    _blend_rgba(arr, self.fgr16[y0:y1, x0:x1], x0, y0)
-        if label:
-            skin_label_overlay(arr, label)
-        return arr.tobytes()
+            frame.paste(rot, (x, y), rot)
+            box = (max(0, x), max(0, y),
+                   min(W, x + rot.width), min(H, y + rot.height))
+            if box[2] > box[0] and box[3] > box[1]:
+                if self.fgr is not None:
+                    fc = self.fgr.crop(box)
+                    frame.paste(fc, box, fc)
+                self.rects.append(box)
+        return frame.tobytes("raw", "BGRX")
 
 
 class PeppyLinearSkin:
@@ -954,7 +988,7 @@ class PeppyLinearSkin:
         bgr = Image.open(SKIN_DIR / cfg["bgr.filename"]).convert("RGB")
         if bgr.size != (W, H):
             bgr = bgr.resize((W, H))
-        self.base = np.ascontiguousarray(_to_xrgb(bgr))
+        self.base = bgr
         ind = Image.open(SKIN_DIR / cfg["indicator.filename"]).convert("RGBA")
         self.single = cfg.get("indicator.type", "").strip() == "single"
         self.dir = cfg.get("direction", "").strip() or "left-right"
@@ -972,18 +1006,39 @@ class PeppyLinearSkin:
         left_ind = ind.transpose(Image.FLIP_LEFT_RIGHT) if _flag("flip.left.x") else ind
         right_ind = ind.transpose(Image.FLIP_LEFT_RIGHT) if _flag("flip.right.x") else ind
         self.ch = [
-            (int(cfg["left.x"]), int(cfg["left.y"]), np.asarray(left_ind, dtype=np.uint16), True),
-            (int(cfg["right.x"]), int(cfg["right.y"]), np.asarray(right_ind, dtype=np.uint16), False),
+            (int(cfg["left.x"]), int(cfg["left.y"]), left_ind, True),
+            (int(cfg["right.x"]), int(cfg["right.y"]), right_ind, False),
         ]
+        # conservative per-channel dirty regions (cover every travel/crop mode)
+        span = self.masks[-1] if self.single else 0
+        self.regions = []
+        for (x, y, ind, _l) in self.ch:
+            iw, ih = ind.size
+            box = (max(0, x - iw), max(0, min(y - span, y)),
+                   min(W, x + iw + span), min(H, y + ih + span))
+            self.regions.append(box)
         self.disp = [0.0, 0.0]
         self._last_t = 0.0
+        self.frame = None
+        self._label = object()
 
-    def render(self, vol: int, label: "str | None" = None) -> bytes:
+    def render(self, vol: int, label: "str | None" = None):
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
         atten = vol_atten_db(vol)
-        arr = self.base.copy()
+        if self.frame is None or label != self._label:
+            self.frame = self.base.copy()
+            if label:
+                skin_label_overlay(self.frame, label)
+            self._label = label
+        frame = self.frame
+        for box in self.regions:
+            frame.paste(self.base.crop(box), box)
+
+        def put(im, px, py):
+            frame.paste(im, (px, py), im)
+
         for i, (x, y, ind, left) in enumerate(self.ch):
             db = VU_LEVELS["l" if i == 0 else "r"] + atten
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
@@ -992,44 +1047,42 @@ class PeppyLinearSkin:
             self.disp[i] += max(-lim, min(lim, step))
             n = min(int(self.disp[i] / self.step), len(self.masks) - 1)
             w = max(1, self.masks[n])
-            ih, iw = ind.shape[:2]
+            iw, ih = ind.size
             if not self.single:   # single: w is a travel offset, not a crop size
                 w = min(w, ih if self.dir in ("bottom-top", "top-bottom") else iw)
             if self.single:
                 if self.dir == "bottom-top":
-                    _blend_rgba(arr, ind, x, y - w)
+                    put(ind, x, y - w)
                 elif self.dir == "top-bottom":
-                    _blend_rgba(arr, ind, x, y + w)
+                    put(ind, x, y + w)
                 else:
-                    _blend_rgba(arr, ind, x + w, y)
+                    put(ind, x + w, y)
             elif self.dir == "bottom-top":
-                _blend_rgba(arr, ind[ih - w:], x, y + ih - w)
+                put(ind.crop((0, ih - w, iw, ih)), x, y + ih - w)
             elif self.dir == "top-bottom":
-                _blend_rgba(arr, ind[:w], x, y)
+                put(ind.crop((0, 0, iw, w)), x, y)
             elif self.dir == "right-left":
-                _blend_rgba(arr, ind[:, iw - w:], x + iw - w, y)
+                put(ind.crop((iw - w, 0, iw, ih)), x + iw - w, y)
             elif self.dir == "edges-center":
                 if left:
-                    _blend_rgba(arr, ind[:, :w], x, y)
+                    put(ind.crop((0, 0, w, ih)), x, y)
                 else:
-                    _blend_rgba(arr, ind[:, iw - w:], x - w, y)
+                    put(ind.crop((iw - w, 0, iw, ih)), x - w, y)
             elif self.dir == "center-edges":
                 if left:
-                    _blend_rgba(arr, ind[:, iw - w:], x - w, y)
+                    put(ind.crop((iw - w, 0, iw, ih)), x - w, y)
                 else:
-                    _blend_rgba(arr, ind[:, :w], x, y)
+                    put(ind.crop((0, 0, w, ih)), x, y)
             else:   # left-right
-                _blend_rgba(arr, ind[:, :w], x, y)
-        if label:
-            skin_label_overlay(arr, label)
-        return arr.tobytes()
+                put(ind.crop((0, 0, w, ih)), x, y)
+        return frame.tobytes("raw", "BGRX")
 
 
-_SKIN_LABEL = {"txt": None, "arr": None}
+_SKIN_LABEL = {"txt": None, "img": None}
 
 
-def skin_label_overlay(arr: np.ndarray, text: str) -> None:
-    """Blend the skin name (shown briefly after a swipe) into the frame."""
+def skin_label_overlay(img: Image.Image, text: str) -> None:
+    """Paste the skin name (shown briefly after a swipe) onto the frame."""
     if _SKIN_LABEL["txt"] != text:
         f = ImageFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 28)
         tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
@@ -1037,9 +1090,9 @@ def skin_label_overlay(arr: np.ndarray, text: str) -> None:
         box = Image.new("RGBA", (w, 46), (0, 0, 0, 150))
         ImageDraw.Draw(box).text((12, 23), text, font=f,
                                  fill=(255, 255, 255, 255), anchor="lm")
-        _SKIN_LABEL["arr"] = np.asarray(box, dtype=np.uint16)
+        _SKIN_LABEL["img"] = box
         _SKIN_LABEL["txt"] = text
-    _blend_rgba(arr, _SKIN_LABEL["arr"], 16, 16)
+    img.paste(_SKIN_LABEL["img"], (16, 16), _SKIN_LABEL["img"])
 
 
 def get_skin(name: str) -> "PeppySkin | PeppyLinearSkin | None":
@@ -1199,9 +1252,26 @@ def timeline_poller() -> None:
         time.sleep(1.0)
 
 
+def _warm_caches() -> None:
+    """Build the expensive static assets at startup, not on first view
+    entry: make_vu_base (3x supersampled faces) alone takes seconds on a
+    Pi 3 and used to stall the first switch into the VU view."""
+    global VU_BASE, FS_FACE
+    try:
+        if VU_BASE is None:
+            VU_BASE = make_vu_base()
+        if FS_FACE is None:
+            FS_FACE = make_vu_face_small()
+        for name in SKIN_LIST[1:]:
+            get_skin(name)
+    except Exception:
+        pass
+
+
 def main() -> None:
     set_backlight(True)   # sync real state: service may restart with screen off
     load_skin_configs()
+    threading.Thread(target=_warm_caches, daemon=True).start()
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
     threading.Thread(target=timeline_poller, daemon=True).start()
@@ -1294,7 +1364,12 @@ def main() -> None:
         if frame != last_frame:
             fb_write(img)
             last_frame = frame
-        time.sleep(0.2)
+        # sleep in slices so a touch that changes the view reacts instantly
+        m0 = VIEW["mode"]
+        for _ in range(10):
+            time.sleep(0.02)
+            if VIEW["mode"] != m0:
+                break
 
 
 if __name__ == "__main__":
