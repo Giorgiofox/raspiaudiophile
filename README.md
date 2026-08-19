@@ -120,9 +120,12 @@ boot (`caldera-vtunbind.service`), screen off after 3 min idle
 (10 min paused -> idle -> 3 min -> backlight off), any touch or encoder
 activity or resumed playback wakes it; panel start syncs the backlight on.
 
-dB honesty: volume dB assumes 0.5 dB/step (vol 100 = 0 dB); VU 0 VU sits at
--8 dBFS, set by ear. Both await calibration by measuring the HAT output
-through the retired UCA202's ADC inputs.
+dB honesty: the volume readout and the VU volume compensation use
+Caldera's MEASURED curve — attenuation = 55 * log10(vol/100) dB, i.e.
+amplitude = (vol/100)^2.75. Calibrated 2026-08-19 with an interleaved
+sweep (peppyalsa FIFO digital peaks cross-checked against a UCA202
+analog loopback on the HAT's RCA out; both agreed within ~1 dB over
+vol 20-100). Tunable via `[volume] curve_db_per_decade`.
 
 ## Repository layout
 

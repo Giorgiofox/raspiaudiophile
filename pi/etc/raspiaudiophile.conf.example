@@ -18,8 +18,9 @@ gpio_dt = 26
 gpio_sw = 13
 
 [volume]
-# dB per volume step shown on screen (vol 100 = 0 dB).
-db_per_step = 0.5
+# Caldera's volume curve: attenuation = curve * log10(vol/100) dB.
+# 55 was measured on Caldera 1.1.0-beta.1 (fits within 1 dB, vol 20-100).
+curve_db_per_decade = 55.0
 
 [vu]
 # dBFS level that reads 0 VU on the meters. peppyalsa delivers peak

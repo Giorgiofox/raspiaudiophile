@@ -86,14 +86,24 @@ def token() -> str:
     return json.loads(PREFS.read_text())["plex"]["token"]
 
 
-DB_PER_STEP = cfg("volume", "db_per_step", 0.5)  # vol 100 = 0 dB, vol 0 = -50 dB
-# TODO: calibrate against Caldera's real curve (UCA202 ADC loopback measure)
+# Caldera's real volume curve, MEASURED 2026-08-19 (interleaved sweep,
+# peppyalsa FIFO digital peaks + UCA202 analog loopback, Get Lucky as
+# steady source): attenuation follows 55*log10(vol/100) within ~1 dB
+# from vol 20 to 100 (i.e. amplitude = (vol/100)^2.75).
+VOL_CURVE_DB = cfg("volume", "curve_db_per_decade", 55.0)
+
+
+def vol_atten_db(vol: int) -> float:
+    """Positive attenuation in dB applied by Caldera at this volume."""
+    if vol <= 0:
+        return 120.0
+    return max(0.0, -VOL_CURVE_DB * math.log10(vol / 100.0))
 
 
 def volume_db(vol: int) -> str:
     if vol <= 0:
         return "MUTE"
-    return f"{-DB_PER_STEP * (100 - vol):.1f} dB"
+    return f"{-vol_atten_db(vol):.1f} dB"
 
 
 def fb_write(img: Image.Image) -> None:
@@ -684,7 +694,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
 
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
-    atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+    atten = vol_atten_db(vol)
     target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
     FS_DISP["m"] = vu_step(FS_DISP["m"], target, dt)
     a = _vu_angle(FS_DISP["m"])
@@ -782,7 +792,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
     _VU_LAST_T["t"] = now
     for mx, ch in ((8, "l"), (404, "r")):
-        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        atten = vol_atten_db(vol)
         target = VU_LEVELS[ch] - VU_REF_DBFS + atten
         VU_DISP[ch] = vu_step(VU_DISP[ch], target, dt)
         a = _vu_angle(VU_DISP[ch])
@@ -890,7 +900,7 @@ class PeppySkin:
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
-        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        atten = vol_atten_db(vol)
         arr = self.base.copy()
         for i, (ox, oy) in enumerate(self.origins):
             if len(self.origins) == 1:
@@ -954,7 +964,7 @@ class PeppyLinearSkin:
         now = time.monotonic()
         dt = min(0.3, now - self._last_t) if self._last_t else 0.03
         self._last_t = now
-        atten = DB_PER_STEP * (100 - vol) if vol > 0 else 60.0
+        atten = vol_atten_db(vol)
         arr = self.base.copy()
         for i, (x, y, ind, left) in enumerate(self.ch):
             db = VU_LEVELS["l" if i == 0 else "r"] + atten
