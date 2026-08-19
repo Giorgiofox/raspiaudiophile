@@ -42,8 +42,12 @@ grep -q "hifiberry-dacplus" "$BOOTCFG" || {
 
 say "ALSA tap + VU FIFO"
 sudo install -m 644 "$REPO/pi/etc/asound.conf" /etc/asound.conf
-sudo install -m 644 "$REPO/pi/etc/peppyalsa-tmpfiles.conf" /etc/tmpfiles.d/peppyalsa.conf
+echo "p /tmp/peppyalsa_fifo 0666 $USER $USER" | sudo tee /etc/tmpfiles.d/peppyalsa.conf >/dev/null
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/peppyalsa.conf
+
+say "Wi-Fi power save off (audio dropouts otherwise)"
+sudo install -m 644 "$REPO/pi/etc/NetworkManager-conf.d/wifi-powersave.conf" \
+    /etc/NetworkManager/conf.d/wifi-powersave.conf 2>/dev/null || true
 
 say "Panel configuration"
 if [ ! -f /etc/raspiaudiophile.conf ]; then
@@ -65,7 +69,7 @@ sudo install -m 755 "$REPO/pi/etc/caldera-splash.sh" /usr/local/bin/caldera-spla
 say "System units and rules"
 sudo install -m 644 "$REPO/pi/etc/caldera-splash.service" /etc/systemd/system/
 sudo install -m 644 "$REPO/pi/etc/caldera-vtunbind.service" /etc/systemd/system/
-sudo install -m 644 "$REPO/pi/etc/99-backlight.rules" /etc/udev/rules.d/ 2>/dev/null || true
+sudo install -m 644 "$REPO/pi/etc/52-backlight.rules" /etc/udev/rules.d/52-backlight.rules
 sudo systemctl daemon-reload
 sudo systemctl enable caldera-splash.service caldera-vtunbind.service
 
@@ -91,4 +95,5 @@ say "Enable services"
 systemctl --user enable caldera-music caldera-panel caldera-watchdog.timer || true
 
 echo
-echo "Done. Reboot, link the player if you haven't, and play something."
+echo "Done. Reboot (group membership and boot config need it), link the"
+echo "player if you haven't, and play something."

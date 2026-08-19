@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""Caldera panel: now-playing display on the MZ61581 TFT (480x320, /dev/fb0).
+"""RaspiAudiophile panel: now-playing display on the official 7" DSI touch
+display (800x480, /dev/fb0, XRGB).
 
 Data sources:
 - Companion timeline on localhost:32500 -> state, volume, ratingKey, server
-- Plex server -> track metadata and cover art (token from Caldera's own
-  preferences.json, never stored here)
+- Plex server -> track metadata, cover art, loudness envelope (token from
+  Caldera's own preferences.json, never stored here)
+- peppyalsa FIFO -> live L/R levels for the VU meters
 
-Rendering: Pillow -> RGB565 -> framebuffer. No X server involved.
+Rendering: Pillow + numpy -> framebuffer. No X server involved.
+Configuration: /etc/raspiaudiophile.conf (see the example in pi/etc/).
 """
 
 import io
 import json
 import math
 import os
+import threading
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-
-import math
-import threading
 
 import numpy as np
 import requests
@@ -1190,6 +1191,10 @@ def main() -> None:
         now = time.monotonic()
         tl = TL_SHARED["tl"]
         tl_at = TL_SHARED["at"]
+        if tl is not None and now - tl_at > 15.0:
+            # Companion stopped answering (e.g. the known Caldera freeze):
+            # drop the stale timeline instead of interpolating it forever
+            tl = None
 
         state = tl.get("state") if tl else None
         if state == "paused":

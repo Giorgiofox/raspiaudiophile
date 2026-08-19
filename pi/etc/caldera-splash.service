@@ -1,5 +1,5 @@
 [Unit]
-Description=Show splash on the TFT as soon as its framebuffer appears
+Description=Show splash as soon as the display framebuffer appears
 DefaultDependencies=no
 After=systemd-udev-trigger.service
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Caldera now-playing panel (TFT + encoder)
+Description=RaspiAudiophile now-playing panel (display + encoder)
 
 [Service]
 Type=simple
