@@ -1136,6 +1136,57 @@ def get_skin(name: str) -> "PeppySkin | PeppyLinearSkin | None":
     return _SKIN_OBJ[name]
 
 
+_NET = {"ip": None, "at": 0.0}
+
+
+def local_ip() -> str:
+    """Cached local IP for the idle screen (refreshed every 10 s)."""
+    import socket
+    now = time.monotonic()
+    if now - _NET["at"] > 10.0:
+        _NET["at"] = now
+        try:
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sk.settimeout(1.0)
+            sk.connect(("8.8.8.8", 80))
+            _NET["ip"] = sk.getsockname()[0]
+            sk.close()
+        except OSError:
+            _NET["ip"] = None
+    return _NET["ip"] or "NO NETWORK"
+
+
+_DIAG = {"txt": "", "at": 0.0}
+
+
+def idle_diag() -> str:
+    """One diagnostic line for the idle screen: Wi-Fi + IP + Caldera.
+    Born from a lost-profile hunt done completely blind — never again."""
+    now = time.monotonic()
+    if now - _DIAG["at"] > 5.0:
+        _DIAG["at"] = now
+        ssid = sig = None
+        try:
+            import subprocess
+            out = subprocess.run(["iw", "dev", "wlan0", "link"],
+                                 capture_output=True, text=True, timeout=2).stdout
+            for ln in out.splitlines():
+                ln = ln.strip()
+                if ln.startswith("SSID:"):
+                    ssid = ln[5:].strip()
+                elif ln.startswith("signal:"):
+                    sig = ln.split()[1] + " dBm"
+        except Exception:
+            pass
+        if ssid:
+            wifi = f"WiFi: {ssid}" + (f" ({sig})" if sig else "")
+        else:
+            wifi = "WiFi: NOT CONNECTED"
+        cal = "Caldera: OK" if now - TL_SHARED["at"] < 6.0 else "Caldera: no response"
+        _DIAG["txt"] = f"{wifi}    IP: {local_ip()}    {cal}"
+    return _DIAG["txt"]
+
+
 IDLE_LOGO_PATH = Path("/usr/local/share/caldera/hires_logo.png")
 _IDLE_LOGO: Image.Image | None = None
 
@@ -1154,7 +1205,8 @@ def render_idle(vol: int) -> Image.Image:
     d.text((W // 2, 255), "RaspiAudiophile", font=F_TITLE, fill=DIM, anchor="mm")
     d.text((W // 2, 298), "D A C", font=F_FMT, fill=DIM, anchor="mm")
     d.text((W // 2, 372), volume_db(vol), font=F_DB, fill=FG, anchor="mm")
-    d.text((W // 2, 440), "Waiting for Plexamp Server", font=F_SMALL, fill=DIM, anchor="mm")
+    d.text((W // 2, 428), "Waiting for Plexamp Server", font=F_SMALL, fill=DIM, anchor="mm")
+    d.text((W // 2, 462), idle_diag(), font=F_SMALL, fill=(110, 110, 115), anchor="mm")
     return img
 
 
