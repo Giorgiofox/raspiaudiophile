@@ -1204,22 +1204,100 @@ def idle_diag() -> str:
             wifi = f"WiFi: {ssid}" + (f" ({sig})" if sig else "")
         else:
             wifi = "WiFi: NOT CONNECTED"
-        cal = "Caldera: OK" if now - TL_SHARED["at"] < 6.0 else "Caldera: no response"
+        cal = "Caldera: online" if now - TL_SHARED["at"] < 6.0 else "Caldera: offline"
         _DIAG["txt"] = f"{wifi}    IP: {local_ip()}    {cal}"
     return _DIAG["txt"]
+
+
+LOGIN = {"active": False, "code": None, "at": 0.0}
+
+
+def plex_token_present() -> bool:
+    try:
+        return bool(json.loads(PREFS.read_text()).get("plex", {}).get("token"))
+    except (OSError, ValueError):
+        return False
+
+
+def login_code() -> "str | None":
+    """Self-service Plex linking: when Caldera has no token, drive the
+    plex.tv/link login and surface the code on screen (no SSH needed).
+    The watchdog and the daemon are stopped first: the daemon's stray-kill
+    ExecStartPre would murder the login (same binary name)."""
+    import re
+    import subprocess
+    now = time.monotonic()
+    if now - LOGIN["at"] < 5.0:
+        return LOGIN["code"]
+    LOGIN["at"] = now
+    caldera = str(Path.home() / "caldera-music/caldera-music")
+    if not LOGIN["active"]:
+        subprocess.run(["systemctl", "--user", "stop",
+                        "caldera-watchdog.timer", "caldera-music"],
+                       capture_output=True, timeout=20)
+        subprocess.run(["systemctl", "--user", "reset-failed", "caldera-login"],
+                       capture_output=True, timeout=10)
+        import socket
+        subprocess.run(["systemd-run", "--user", "--unit=caldera-login", "bash", "-c",
+                        f"{caldera} --login --player-name {socket.gethostname()} "
+                        "> /tmp/login.log 2>&1"],
+                       capture_output=True, timeout=20)
+        LOGIN["active"] = True
+        LOGIN["code"] = None
+        return None
+    r = subprocess.run(["systemctl", "--user", "is-active", "caldera-login"],
+                       capture_output=True, text=True, timeout=10)
+    if r.stdout.strip() != "active":
+        LOGIN["active"] = False     # expired or crashed: relaunch next tick
+        return LOGIN["code"]
+    try:
+        m = re.search(r"Enter code: ([A-Z0-9]+)",
+                      Path("/tmp/login.log").read_text(errors="ignore"))
+        if m:
+            LOGIN["code"] = m.group(1)
+    except OSError:
+        pass
+    return LOGIN["code"]
+
+
+def login_finished() -> None:
+    """Token appeared: put the normal services back."""
+    import subprocess
+    subprocess.run(["systemctl", "--user", "start",
+                    "caldera-music", "caldera-watchdog.timer"],
+                   capture_output=True, timeout=20)
+    LOGIN["active"] = False
+
+
+def render_login(code: "str | None") -> Image.Image:
+    _load_idle_logo()
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    if _IDLE_LOGO is not None:
+        img.paste(_IDLE_LOGO, (W // 2 - 100, 15), _IDLE_LOGO)
+    d.text((W // 2, 250), "Link this player to Plex", font=F_TITLE, fill=FG, anchor="mm")
+    d.text((W // 2, 300), "plex.tv/link", font=F_FMT, fill=ACCENT, anchor="mm")
+    d.text((W // 2, 385), code or "requesting code...",
+           font=F_DB if code else F_TEXT, fill=FG, anchor="mm")
+    d.text((W // 2, 462), idle_diag(), font=F_SMALL, fill=(110, 110, 115), anchor="mm")
+    return img
 
 
 IDLE_LOGO_PATH = Path("/usr/local/share/caldera/hires_logo.png")
 _IDLE_LOGO: Image.Image | None = None
 
 
-def render_idle(vol: int) -> Image.Image:
+def _load_idle_logo() -> None:
     global _IDLE_LOGO
     if _IDLE_LOGO is None and IDLE_LOGO_PATH.exists():
         try:
             _IDLE_LOGO = Image.open(IDLE_LOGO_PATH).convert("RGBA").resize((200, 200))
         except OSError:
             _IDLE_LOGO = None
+
+
+def render_idle(vol: int) -> Image.Image:
+    _load_idle_logo()
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     if _IDLE_LOGO is not None:
@@ -1444,7 +1522,12 @@ def main() -> None:
 
         if tl is None or state in (None, "stopped") or "key" not in tl or stale_pause:
             vol = live_vol(int(tl.get("volume", 0)) if tl else 0)
-            img = render_idle(vol)
+            if not plex_token_present():
+                img = render_login(login_code())
+            else:
+                if LOGIN["active"]:
+                    login_finished()   # token just arrived: resume services
+                img = render_idle(vol)
             last_key = None
             if idle_since == 0.0:
                 idle_since = now
