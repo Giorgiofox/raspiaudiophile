@@ -117,18 +117,40 @@ def volume_db(vol: int) -> str:
 
 _FB_FD = -1
 FBIO_WAITFORVSYNC = 0x40044620
+_VSYNC = {"ok": False}
+
+
+def _vsync_probe() -> None:
+    try:
+        fd = os.open(str(FB), os.O_RDWR)
+        fcntl.ioctl(fd, FBIO_WAITFORVSYNC, 0)
+        fcntl.ioctl(fd, FBIO_WAITFORVSYNC, 0)
+        os.close(fd)
+        _VSYNC["ok"] = True
+    except OSError:
+        pass
+
+
+def init_vsync() -> None:
+    """Some boots never deliver a vblank IRQ on the firmware fb: the
+    WAITFORVSYNC ioctl then blocks FOREVER (panel frozen in D state,
+    knob dead). Probe it in a throwaway thread with a timeout; only
+    trust it if it answers twice within half a second."""
+    t = threading.Thread(target=_vsync_probe, daemon=True)
+    t.start()
+    t.join(0.5)
 
 
 def fb_out(buf: bytes) -> None:
-    """Write a full frame right after vblank so the memcpy outruns the
-    scanout beam — without this the needles tear mid-screen."""
+    """Write a full frame; vsync'd only when this boot's vblank works."""
     global _FB_FD
     if _FB_FD < 0:
         _FB_FD = os.open(str(FB), os.O_RDWR)
-    try:
-        fcntl.ioctl(_FB_FD, FBIO_WAITFORVSYNC, 0)
-    except OSError:
-        pass
+    if _VSYNC["ok"]:
+        try:
+            fcntl.ioctl(_FB_FD, FBIO_WAITFORVSYNC, 0)
+        except OSError:
+            pass
     os.pwrite(_FB_FD, buf, 0)
 
 
@@ -1382,6 +1404,7 @@ def trim_skins(active: str) -> None:
 
 def main() -> None:
     set_backlight(True)   # sync real state: service may restart with screen off
+    init_vsync()
     load_skin_configs()
     threading.Thread(target=_warm_caches, daemon=True).start()
     threading.Thread(target=touch_listener, daemon=True).start()

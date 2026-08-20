@@ -1,12 +1,11 @@
 [Unit]
-Description=Restore Wi-Fi profile if fsck orphan-cleanup destroyed it
+Description=Restore Wi-Fi profiles if fsck orphan-cleanup destroyed them
 Before=NetworkManager.service
-ConditionPathExists=!/etc/NetworkManager/system-connections/GiorgioFoX.nmconnection
+ConditionDirectoryNotEmpty=!/etc/NetworkManager/system-connections
 
 [Service]
 Type=oneshot
-ExecStart=/bin/cp -p /usr/local/share/caldera/wifi-backup/GiorgioFoX.nmconnection /etc/NetworkManager/system-connections/
-ExecStartPost=/bin/chmod 600 /etc/NetworkManager/system-connections/GiorgioFoX.nmconnection
+ExecStart=/bin/sh -c 'cp -p /usr/local/share/caldera/wifi-backup/*.nmconnection /etc/NetworkManager/system-connections/ 2>/dev/null; chmod 600 /etc/NetworkManager/system-connections/*.nmconnection 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target

@@ -91,6 +91,26 @@ if [ ! -d "$HOME/caldera-music" ] && ! command -v caldera-music >/dev/null; then
     echo "  audio.outputDeviceUid=caldera_tap  audio.sampleRate=0  audio.audioBufferMs=100"
 fi
 
+say "Reliability hardening"
+# survive post-mortems and cold-power incidents (learned the hard way)
+sudo mkdir -p /var/log/journal
+sudo sed -i "s/^#\?Storage=.*/Storage=persistent/" /etc/systemd/journald.conf
+CMDLINE=/boot/firmware/cmdline.txt
+[ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
+grep -q cgroup_enable=memory "$CMDLINE" || \
+    sudo sed -i "s/\$/ cgroup_enable=memory cgroup_memory=1/" "$CMDLINE"
+# clean shutdown from the encoder knob (6 s hold)
+echo "$USER ALL=(root) NOPASSWD: /sbin/poweroff" | sudo tee /etc/sudoers.d/caldera-poweroff >/dev/null
+sudo chmod 440 /etc/sudoers.d/caldera-poweroff
+# back up the Wi-Fi profile and restore it if fsck ever eats it
+sudo install -m 644 "$REPO/pi/etc/nm-profile-restore.service" /etc/systemd/system/
+if ls /etc/NetworkManager/system-connections/*.nmconnection >/dev/null 2>&1; then
+    sudo mkdir -p /usr/local/share/caldera/wifi-backup
+    sudo cp /etc/NetworkManager/system-connections/*.nmconnection /usr/local/share/caldera/wifi-backup/
+    sudo chmod 600 /usr/local/share/caldera/wifi-backup/*
+fi
+sudo systemctl enable nm-profile-restore.service
+
 say "Enable services"
 systemctl --user enable caldera-music caldera-panel caldera-watchdog.timer || true
 
