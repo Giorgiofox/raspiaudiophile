@@ -1286,6 +1286,17 @@ def encoder_worker() -> None:
     def on_release():
         if held["fired"]:
             held["fired"] = False
+            # 6+ s hold = clean shutdown: cold power cuts corrupted the
+            # filesystem once (lost Wi-Fi profile) — never pull the plug
+            if time.monotonic() - click["pressed_at"] >= 6.0:
+                try:
+                    img = Image.new("RGB", (W, H), BG)
+                    ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
+                                             font=F_TITLE, fill=FG, anchor="mm")
+                    fb_write(img)
+                except Exception:
+                    pass
+                os.system("sudo /sbin/poweroff")
             return
         now = time.monotonic()
         # ghost-click guards: shaft wobble while rotating, sub-40ms glitches
