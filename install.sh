@@ -16,7 +16,7 @@ say "APT packages"
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     python3-numpy python3-pil python3-requests python3-evdev \
-    python3-gpiozero python3-lgpio fonts-dejavu-core \
+    python3-gpiozero python3-lgpio fonts-dejavu-core iw \
     git build-essential autoconf automake libtool libasound2-dev \
     libfftw3-dev alsa-utils curl
 
@@ -32,13 +32,28 @@ if [ ! -e /usr/lib/libpeppyalsa.so ]; then
         sudo make -s install)
 fi
 
-say "Boot config (I2S DAC overlay, display)"
+say "Boot config (I2S DAC overlay, display, turbo)"
 BOOTCFG=/boot/firmware/config.txt
 [ -f "$BOOTCFG" ] || BOOTCFG=/boot/config.txt
-grep -q "hifiberry-dacplus" "$BOOTCFG" || {
-    echo "NOTE: add 'dtoverlay=hifiberry-dacplus,slave' to $BOOTCFG"
-    echo "      (,slave is REQUIRED on clone HATs with doubled crystals)"
-}
+sudo cp "$BOOTCFG" "$BOOTCFG.pre-raspiaudiophile"
+sudo install -m 644 "$REPO/pi/boot/config.txt" "$BOOTCFG"
+CMDLINE=/boot/firmware/cmdline.txt
+[ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
+grep -q "vt.global_cursor_default" "$CMDLINE" || \
+    sudo sed -i "s/\$/ quiet loglevel=3 vt.global_cursor_default=0/" "$CMDLINE"
+
+say "Boot speed (37.9 -> ~22 s measured on the reference build)"
+sudo systemctl disable --now bluetooth.service hciuart.service \
+    ModemManager.service udisks2.service keyboard-setup.service \
+    console-setup.service e2scrub_reap.service NetworkManager-wait-online.service \
+    2>/dev/null || true
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer \
+    man-db.timer dpkg-db-backup.timer 2>/dev/null || true
+# no swap: 512 MB is managed by the panel MemoryMax guard, and swap on SD
+# both thrashes (frozen system) and wears the card
+sudo systemctl disable --now dphys-swapfile 2>/dev/null || true
+# NOTE: avahi/mDNS stays ENABLED on purpose: RaspiAudiophile.local saved
+# us during network incidents; it costs half a second of boot
 
 say "ALSA tap + VU FIFO"
 sudo install -m 644 "$REPO/pi/etc/asound.conf" /etc/asound.conf
@@ -84,17 +99,25 @@ say "Caldera Music"
 if [ ! -d "$HOME/caldera-music" ] && ! command -v caldera-music >/dev/null; then
     echo "Installing Caldera Music headless..."
     curl -sSL https://releases.caldera.homes/music/headless/install.sh | bash
+    # Caldera's installer ships its own user unit: re-assert ours + drop-ins
+    cp -r "$REPO/pi/systemd-user/." "$HOME/.config/systemd/user/"
+    systemctl --user daemon-reload
     echo
-    echo "Now link the player (plex.tv PIN):"
-    echo "  caldera-music --login --player-name RaspiAudiophile"
-    echo "Then set:"
-    echo "  audio.outputDeviceUid=caldera_tap  audio.sampleRate=0  audio.audioBufferMs=100"
+    echo "IMPORTANT - switch to the beta channel (stable 1.0.47 has a fatal"
+    echo "Companion freeze, see docs/caldera-freeze-report.md):"
+    echo "  bash ~/caldera-music/upgrade.sh --beta"
+    echo
+    echo "Link the player (plex.tv PIN):"
+    echo "  ~/caldera-music/caldera-music --login --player-name RaspiAudiophile"
+    echo "Then run:"
+    echo "  ~/caldera-music/caldera-music --set audio.outputDeviceUid=caldera_tap --set audio.sampleRate=0 --set audio.audioBufferMs=100 --set player.loudnessLeveling=no --set player.sweetFades=no"
 fi
 
 say "Reliability hardening"
 # survive post-mortems and cold-power incidents (learned the hard way)
 sudo mkdir -p /var/log/journal
 sudo sed -i "s/^#\?Storage=.*/Storage=persistent/" /etc/systemd/journald.conf
+sudo sed -i "s/^#\?SystemMaxUse=.*/SystemMaxUse=64M/" /etc/systemd/journald.conf
 CMDLINE=/boot/firmware/cmdline.txt
 [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
 grep -q cgroup_enable=memory "$CMDLINE" || \
