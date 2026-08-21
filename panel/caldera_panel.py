@@ -1387,8 +1387,9 @@ def encoder_worker() -> None:
             fb_write(img)
         except Exception:
             pass
-        time.sleep(1.5)
-        set_backlight(False)   # dark screen instead of shutdown garbage
+        # the message stays on for the whole shutdown; the system-shutdown
+        # hook (backlight-off.shutdown) blanks the screen at the exact
+        # moment the filesystem is read-only: BLACK SCREEN = safe to unplug
         os.system("sudo /sbin/poweroff")
 
     def on_held():

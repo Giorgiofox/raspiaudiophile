@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs at the last stage of shutdown (rootfs already read-only):
+# turning the backlight off signals "safe to unplug".
+echo 1 > /sys/class/backlight/rpi_backlight/bl_power 2>/dev/null
+exit 0

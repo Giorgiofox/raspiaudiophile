@@ -80,6 +80,8 @@ sudo cp -r "$REPO/panel/skins/." "$SHARE/skins/"
 python3 "$REPO/panel/make_splash.py"
 sudo install -m 644 /tmp/splash.raw "$SHARE/splash.raw"
 sudo install -m 755 "$REPO/pi/etc/caldera-splash.sh" /usr/local/bin/caldera-splash.sh
+sudo mkdir -p /usr/lib/systemd/system-shutdown
+sudo install -m 755 "$REPO/pi/etc/backlight-off.shutdown" /usr/lib/systemd/system-shutdown/
 
 say "System units and rules"
 sudo install -m 644 "$REPO/pi/etc/caldera-splash.service" /etc/systemd/system/
