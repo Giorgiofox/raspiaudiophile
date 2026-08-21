@@ -61,6 +61,24 @@ SCREEN_OFF_S = cfg("screen", "screen_off_s", 180)
 BL_POWER = Path("/sys/class/backlight/rpi_backlight/bl_power")
 SCREEN = {"on": True}
 SHUTDOWN = {"on": False}
+
+# Runtime-tunable values, seeded from config, editable in the settings menu
+RT = {
+    "brightness": cfg("display", "brightness", 100),
+    "screen_off": cfg("screen", "screen_off_s", 180),
+    "detent_div": cfg("encoder", "detent_divisor", 1),
+    "vu_trim": cfg("vu", "ref_trim", 0.0),
+    "def_skin": cfg("skins", "default", "amber"),
+}
+SETTINGS = {"on": False, "idx": 0, "at": 0.0}
+BRIGHT_PATH = Path("/sys/class/backlight/rpi_backlight/brightness")
+
+
+def apply_brightness() -> None:
+    try:
+        BRIGHT_PATH.write_text(str(max(13, RT["brightness"] * 255 // 100)))
+    except OSError:
+        pass
 SEEN_PLAYING = {"yes": False}
 
 
@@ -327,6 +345,114 @@ def wrap2(draw, text, font, max_w):
 VIEW = {"mode": 0}  # 0 info, 1 fullscreen cover, 2 VU meters
 
 
+SETTING_ITEMS = [
+    ("Brightness", "brightness"),
+    ("Screen off", "screen_off"),
+    ("Knob sensitivity", "detent_div"),
+    ("VU zero trim", "vu_trim"),
+    ("Default VU skin", "def_skin"),
+]
+_SCREEN_OFF_STEPS = [60, 180, 300, 600, 1800, 0]   # 0 = never
+
+
+def _fmt_setting(key) -> str:
+    v = RT[key]
+    if key == "brightness":
+        return f"{v} %"
+    if key == "screen_off":
+        return "never" if v == 0 else f"{v // 60} min"
+    if key == "detent_div":
+        return "fast" if v <= 1 else "fine"
+    if key == "vu_trim":
+        return f"{v:+.2f} dB"
+    return str(v)
+
+
+def settings_adjust(d: int) -> None:
+    """Knob rotation edits the highlighted item."""
+    SETTINGS["at"] = time.monotonic()
+    key = SETTING_ITEMS[SETTINGS["idx"]][1]
+    if key == "brightness":
+        RT["brightness"] = max(10, min(100, RT["brightness"] + 5 * d))
+        apply_brightness()
+    elif key == "screen_off":
+        i = _SCREEN_OFF_STEPS.index(RT["screen_off"]) if RT["screen_off"] in _SCREEN_OFF_STEPS else 1
+        RT["screen_off"] = _SCREEN_OFF_STEPS[max(0, min(len(_SCREEN_OFF_STEPS) - 1, i + d))]
+    elif key == "detent_div":
+        RT["detent_div"] = 2 if d > 0 else 1
+    elif key == "vu_trim":
+        RT["vu_trim"] = max(-3.0, min(3.0, round(RT["vu_trim"] + 0.25 * d, 2)))
+    elif key == "def_skin":
+        i = SKIN_LIST.index(RT["def_skin"]) if RT["def_skin"] in SKIN_LIST else 0
+        i = (i + d) % len(SKIN_LIST)
+        RT["def_skin"] = SKIN_LIST[i]
+        VU_SKIN["i"] = i               # apply live so the choice is visible
+
+
+def settings_next() -> None:
+    SETTINGS["at"] = time.monotonic()
+    SETTINGS["idx"] = (SETTINGS["idx"] + 1) % len(SETTING_ITEMS)
+
+
+def settings_save_and_exit() -> None:
+    """Persist to the user config (read layered after /etc) and leave."""
+    import configparser
+    path = Path.home() / ".config/raspiaudiophile.conf"
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(path)
+    def put(sec, key, val):
+        if not cp.has_section(sec):
+            cp.add_section(sec)
+        cp.set(sec, key, str(val))
+    put("display", "brightness", RT["brightness"])
+    put("screen", "screen_off_s", RT["screen_off"])
+    put("encoder", "detent_divisor", RT["detent_div"])
+    put("vu", "ref_trim", RT["vu_trim"])
+    put("skins", "default", RT["def_skin"])
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            cp.write(f)
+    except OSError:
+        pass
+    SETTINGS["on"] = False
+
+
+SET_ROW_Y0, SET_ROW_H = 96, 58
+SET_BTN_Y = 410
+SET_BTNS = {   # name -> (x0, x1) at SET_BTN_Y..H
+    "back": (16, 260),
+    "reboot": (300, 500),
+    "poweroff": (540, 784),
+}
+
+
+def render_settings() -> Image.Image:
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((16, 14), "Settings", font=F_TITLE, fill=FG)
+    d.text((W - 16, 30), "rotate = adjust   press = next",
+           font=F_SMALL, fill=DIM, anchor="rm")
+    d.line((16, 74, W - 16, 74), fill=(60, 60, 65), width=2)
+    for i, (label, key) in enumerate(SETTING_ITEMS):
+        y = SET_ROW_Y0 + i * SET_ROW_H
+        sel = i == SETTINGS["idx"]
+        if sel:
+            d.rounded_rectangle((10, y - 8, W - 10, y + SET_ROW_H - 22),
+                                radius=8, fill=(38, 32, 20))
+        d.text((28, y + 12), label, font=F_TEXT,
+               fill=ACCENT if sel else FG, anchor="lm")
+        d.text((W - 28, y + 12), _fmt_setting(key), font=F_TEXT,
+               fill=FG if sel else DIM, anchor="rm")
+    for name, (x0, x1) in SET_BTNS.items():
+        col = {"back": (60, 60, 68), "reboot": (70, 55, 25), "poweroff": (80, 30, 25)}[name]
+        d.rounded_rectangle((x0, SET_BTN_Y, x1, H - 14), radius=10, fill=col)
+        lbl = {"back": "Back", "reboot": "Reboot", "poweroff": "Power off"}[name]
+        d.text(((x0 + x1) // 2, (SET_BTN_Y + H - 14) // 2), lbl,
+               font=F_FMT, fill=FG, anchor="mm")
+    return img
+
+
 def touch_listener() -> None:
     try:
         import evdev
@@ -357,6 +483,35 @@ def touch_listener() -> None:
             if not SCREEN["on"]:
                 set_backlight(True)         # wake only, keep the current view
                 SCREEN["wake_at"] = now
+            elif SETTINGS["on"]:
+                if cur_x is None or cur_y is None:
+                    continue
+                SETTINGS["at"] = now
+                if cur_y >= SET_BTN_Y:
+                    if SET_BTNS["back"][0] <= cur_x <= SET_BTNS["back"][1]:
+                        settings_save_and_exit()
+                    elif SET_BTNS["reboot"][0] <= cur_x <= SET_BTNS["reboot"][1]:
+                        settings_save_and_exit()
+                        os.system("sudo /sbin/reboot")
+                    elif SET_BTNS["poweroff"][0] <= cur_x <= SET_BTNS["poweroff"][1]:
+                        settings_save_and_exit()
+                        SHUTDOWN["on"] = True
+                        time.sleep(0.1)
+                        img = Image.new("RGB", (W, H), BG)
+                        ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
+                                                 font=F_TITLE, fill=FG, anchor="mm")
+                        fb_write(img)
+                        os.system("sudo /sbin/poweroff")
+                elif SET_ROW_Y0 - 10 <= cur_y:
+                    i = (cur_y - (SET_ROW_Y0 - 10)) // SET_ROW_H
+                    if 0 <= i < len(SETTING_ITEMS):
+                        SETTINGS["idx"] = int(i)   # tap a row to select it
+            elif cur_x is not None and cur_y is not None \
+                    and cur_y < 110 and cur_x > W - 190:
+                # top-right corner in any view: open the settings menu
+                SETTINGS["on"] = True
+                SETTINGS["idx"] = 0
+                SETTINGS["at"] = now
             elif (VIEW["mode"] == 2 and len(SKIN_LIST) > 1
                   and cur_x is not None and cur_y is not None and cur_y > H - 160):
                 # the whole bottom strip in the VU view belongs to skin
@@ -798,7 +953,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
     atten = vu_comp_db(vol)
-    target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + atten
+    target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - (VU_REF_DBFS + RT["vu_trim"]) + atten
     FS_DISP["m"] = vu_step(FS_DISP["m"], target, dt)
     a = _vu_angle(FS_DISP["m"])
     cx, py = FS_FACE_W // 2, FS_PIVOT_Y
@@ -893,7 +1048,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
     _VU_LAST_T["t"] = now
     for mx, ch in ((8, "l"), (404, "r")):
         atten = vu_comp_db(vol)
-        target = VU_LEVELS[ch] - VU_REF_DBFS + atten
+        target = VU_LEVELS[ch] - (VU_REF_DBFS + RT["vu_trim"]) + atten
         VU_DISP[ch] = vu_step(VU_DISP[ch], target, dt)
         a = _vu_angle(VU_DISP[ch])
         cx = VU_MW // 2
@@ -1399,7 +1554,10 @@ def encoder_worker() -> None:
             do_shutdown()             # immediately at 6 s, no release needed
 
     def single_click():
-        companion_cmd("playPause")
+        if SETTINGS["on"]:
+            settings_next()
+        else:
+            companion_cmd("playPause")
 
     def on_release():
         if held["fired"]:
@@ -1435,10 +1593,10 @@ def encoder_worker() -> None:
 
     # some KY-040 clones emit 2 quadrature cycles per physical detent:
     # divide raw counts, carrying the remainder so slow turns are not lost
-    divisor = max(1, cfg("encoder", "detent_divisor", 1))
     carry = 0
     while True:
         time.sleep(0.2)
+        divisor = max(1, int(RT["detent_div"]))
         with lock:
             raw = pending["delta"]
             pending["delta"] = 0
@@ -1446,6 +1604,9 @@ def encoder_worker() -> None:
         d = int(raw / divisor)
         carry = raw - d * divisor
         if d == 0:
+            continue
+        if SETTINGS["on"]:
+            settings_adjust(d)
             continue
         now = time.monotonic()
         tl = TL_SHARED["tl"] or {}
@@ -1496,8 +1657,11 @@ def trim_skins(active: str) -> None:
 
 def main() -> None:
     set_backlight(True)   # sync real state: service may restart with screen off
+    apply_brightness()
     init_vsync()
     load_skin_configs()
+    if RT["def_skin"] in SKIN_LIST:
+        VU_SKIN["i"] = SKIN_LIST.index(RT["def_skin"])
     threading.Thread(target=_warm_caches, daemon=True).start()
     threading.Thread(target=touch_listener, daemon=True).start()
     threading.Thread(target=vu_capture, daemon=True).start()
@@ -1516,6 +1680,14 @@ def main() -> None:
         if SHUTDOWN["on"]:
             time.sleep(1.0)       # renders frozen: the goodbye screen stays
             continue
+        if SETTINGS["on"]:
+            if time.monotonic() - SETTINGS["at"] > 60.0:
+                settings_save_and_exit()   # forgotten menu: save and leave
+            else:
+                fb_write(render_settings())
+                last_frame = b""
+                time.sleep(0.1)
+                continue
         now = time.monotonic()
         tl = TL_SHARED["tl"]
         tl_at = TL_SHARED["at"]
@@ -1553,8 +1725,9 @@ def main() -> None:
             last_key = None
             if idle_since == 0.0:
                 idle_since = now
-            elif (SCREEN["on"] and now - idle_since > SCREEN_OFF_S
-                  and now - SCREEN.get("wake_at", 0.0) > SCREEN_OFF_S):
+            elif (SCREEN["on"] and RT["screen_off"] > 0
+                  and now - idle_since > RT["screen_off"]
+                  and now - SCREEN.get("wake_at", 0.0) > RT["screen_off"]):
                 set_backlight(False)
         else:
             idle_since = 0.0
