@@ -60,6 +60,8 @@ PAUSED_TO_IDLE_S = cfg("screen", "paused_to_idle_s", 600)
 SCREEN_OFF_S = cfg("screen", "screen_off_s", 180)
 BL_POWER = Path("/sys/class/backlight/rpi_backlight/bl_power")
 SCREEN = {"on": True}
+SHUTDOWN = {"on": False}
+SEEN_PLAYING = {"yes": False}
 
 
 def set_backlight(on: bool) -> None:
@@ -1345,7 +1347,8 @@ def encoder_worker() -> None:
                             cfg("encoder", "gpio_dt", 26),
                             max_steps=0, wrap=False)
         btn = Button(cfg("encoder", "gpio_sw", 13),
-                     pull_up=True, bounce_time=0.03, hold_time=0.8)
+                     pull_up=True, bounce_time=0.03, hold_time=0.8,
+                     hold_repeat=True)
     except Exception:
         return
 
@@ -1373,12 +1376,26 @@ def encoder_worker() -> None:
     def on_press():
         click["pressed_at"] = time.monotonic()
 
+    def do_shutdown():
+        # freeze the render loop FIRST or it repaints over the message
+        SHUTDOWN["on"] = True
+        time.sleep(0.1)
+        try:
+            img = Image.new("RGB", (W, H), BG)
+            ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
+                                     font=F_TITLE, fill=FG, anchor="mm")
+            fb_write(img)
+        except Exception:
+            pass
+        time.sleep(1.5)
+        set_backlight(False)   # dark screen instead of shutdown garbage
+        os.system("sudo /sbin/poweroff")
+
     def on_held():
+        # fires every 0.8 s while pressed (hold_repeat)
         held["fired"] = True          # swallow the release either way
-        if time.monotonic() - pending["last_rot"] < 0.5:
-            return                    # ghost hold while rotating
-        _wake_screen()
-        companion_cmd("skipPrevious")
+        if not SHUTDOWN["on"] and time.monotonic() - click["pressed_at"] >= 6.0:
+            do_shutdown()             # immediately at 6 s, no release needed
 
     def single_click():
         companion_cmd("playPause")
@@ -1386,17 +1403,13 @@ def encoder_worker() -> None:
     def on_release():
         if held["fired"]:
             held["fired"] = False
-            # 6+ s hold = clean shutdown: cold power cuts corrupted the
-            # filesystem once (lost Wi-Fi profile) — never pull the plug
-            if time.monotonic() - click["pressed_at"] >= 6.0:
-                try:
-                    img = Image.new("RGB", (W, H), BG)
-                    ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
-                                             font=F_TITLE, fill=FG, anchor="mm")
-                    fb_write(img)
-                except Exception:
-                    pass
-                os.system("sudo /sbin/poweroff")
+            now = time.monotonic()
+            # long-press < 6 s = previous track (decided at RELEASE so a
+            # shutdown hold no longer restarts the song on its way)
+            if (not SHUTDOWN["on"] and now - click["pressed_at"] >= 0.8
+                    and now - pending["last_rot"] >= 0.5):
+                _wake_screen()
+                companion_cmd("skipPrevious")
             return
         now = time.monotonic()
         # ghost-click guards: shaft wobble while rotating, sub-40ms glitches
@@ -1499,6 +1512,9 @@ def main() -> None:
     paused_since = 0.0
     idle_since = 0.0
     while True:
+        if SHUTDOWN["on"]:
+            time.sleep(1.0)       # renders frozen: the goodbye screen stays
+            continue
         now = time.monotonic()
         tl = TL_SHARED["tl"]
         tl_at = TL_SHARED["at"]
@@ -1508,12 +1524,17 @@ def main() -> None:
             tl = None
 
         state = tl.get("state") if tl else None
+        if state == "playing":
+            SEEN_PLAYING["yes"] = True
         if state == "paused":
             if paused_since == 0.0:
                 paused_since = now
         else:
             paused_since = 0.0
-        stale_pause = paused_since and now - paused_since > PAUSED_TO_IDLE_S
+        # a queue resumed as "paused" at boot is stale history, not a session:
+        # keep the idle screen (with IP/diagnostics) until real playback
+        stale_pause = paused_since and (now - paused_since > PAUSED_TO_IDLE_S
+                                        or not SEEN_PLAYING["yes"])
 
         def live_vol(fallback: int) -> int:
             if VOL_LOCAL["v"] is not None and now - VOL_LOCAL["at"] < 2.0:
