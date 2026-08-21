@@ -425,7 +425,7 @@ def settings_save_and_exit() -> None:
     SETTINGS["on"] = False
 
 
-SET_ROW_Y0, SET_ROW_H = 96, 58
+SET_ROW_Y0, SET_ROW_H = 92, 50
 SET_BTN_Y = 410
 SET_BTNS = {   # name -> (x0, x1) at SET_BTN_Y..H
     "back": (16, 260),
