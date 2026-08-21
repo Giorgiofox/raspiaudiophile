@@ -343,7 +343,7 @@ def wrap2(draw, text, font, max_w):
     return lines
 
 
-VIEW = {"mode": 0}  # 0 info, 1 fullscreen cover, 2 VU meters
+VIEW = {"mode": 0}  # 0 info, 1 fullscreen cover, 2 VU meters, 3 standby/diag
 
 
 SETTING_ITEMS = [
@@ -531,7 +531,7 @@ def touch_listener() -> None:
                     VU_SKIN["i"] = (VU_SKIN["i"] + 1) % len(SKIN_LIST)
                     VU_SKIN["at"] = now
             else:
-                VIEW["mode"] = (VIEW["mode"] + 1) % 3
+                VIEW["mode"] = (VIEW["mode"] + 1) % 4
 
 
 def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
@@ -1779,6 +1779,8 @@ def main() -> None:
                 last_frame = b""
                 time.sleep(0.028)   # ~20 fps: this LCD needs ~45 ms between needle positions or it ghosts doubles
                 continue
+            elif VIEW["mode"] == 3:
+                img = render_idle(vol)   # standby view: IP, Wi-Fi, diagnostics
             else:
                 img = render(state or "?", vol, meta, cover,
                              t_ms, int(tl.get("duration", 0)), levels)
