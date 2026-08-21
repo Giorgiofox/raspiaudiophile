@@ -69,6 +69,7 @@ RT = {
     "detent_div": cfg("encoder", "detent_divisor", 1),
     "vu_trim": cfg("vu", "ref_trim", 0.0),
     "def_skin": cfg("skins", "default", "amber"),
+    "hold_off": cfg("encoder", "shutdown_hold_s", 6),
 }
 SETTINGS = {"on": False, "idx": 0, "at": 0.0}
 BRIGHT_PATH = Path("/sys/class/backlight/rpi_backlight/brightness")
@@ -351,6 +352,7 @@ SETTING_ITEMS = [
     ("Knob sensitivity", "detent_div"),
     ("VU zero trim", "vu_trim"),
     ("Default VU skin", "def_skin"),
+    ("Shutdown hold", "hold_off"),
 ]
 _SCREEN_OFF_STEPS = [60, 180, 300, 600, 1800, 0]   # 0 = never
 
@@ -365,6 +367,8 @@ def _fmt_setting(key) -> str:
         return "fast" if v <= 1 else "fine"
     if key == "vu_trim":
         return f"{v:+.2f} dB"
+    if key == "hold_off":
+        return f"{v} s"
     return str(v)
 
 
@@ -382,6 +386,8 @@ def settings_adjust(d: int) -> None:
         RT["detent_div"] = 2 if d > 0 else 1
     elif key == "vu_trim":
         RT["vu_trim"] = max(-3.0, min(3.0, round(RT["vu_trim"] + 0.25 * d, 2)))
+    elif key == "hold_off":
+        RT["hold_off"] = max(3, min(10, RT["hold_off"] + d))
     elif key == "def_skin":
         i = SKIN_LIST.index(RT["def_skin"]) if RT["def_skin"] in SKIN_LIST else 0
         i = (i + d) % len(SKIN_LIST)
@@ -409,6 +415,7 @@ def settings_save_and_exit() -> None:
     put("encoder", "detent_divisor", RT["detent_div"])
     put("vu", "ref_trim", RT["vu_trim"])
     put("skins", "default", RT["def_skin"])
+    put("encoder", "shutdown_hold_s", RT["hold_off"])
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -1550,7 +1557,7 @@ def encoder_worker() -> None:
     def on_held():
         # fires every 0.8 s while pressed (hold_repeat)
         held["fired"] = True          # swallow the release either way
-        if not SHUTDOWN["on"] and time.monotonic() - click["pressed_at"] >= 6.0:
+        if not SHUTDOWN["on"] and time.monotonic() - click["pressed_at"] >= RT["hold_off"]:
             do_shutdown()             # immediately at 6 s, no release needed
 
     def single_click():
@@ -1565,8 +1572,8 @@ def encoder_worker() -> None:
             now = time.monotonic()
             # long-press < 6 s = previous track (decided at RELEASE so a
             # shutdown hold no longer restarts the song on its way)
-            if (not SHUTDOWN["on"] and now - click["pressed_at"] >= 0.8
-                    and now - pending["last_rot"] >= 0.5):
+            if (not SHUTDOWN["on"] and now - pending["last_rot"] >= 0.5
+                    and 0.8 <= now - click["pressed_at"] < RT["hold_off"]):
                 _wake_screen()
                 companion_cmd("skipPrevious")
             return
