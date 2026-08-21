@@ -502,6 +502,7 @@ def touch_listener() -> None:
                         settings_save_and_exit()
                     elif SET_BTNS["standby"][0] <= cur_x <= SET_BTNS["standby"][1]:
                         settings_save_and_exit()
+                        companion_cmd("pause")   # real standby: playback stops
                         VIEW["standby"] = True
                     elif SET_BTNS["reboot"][0] <= cur_x <= SET_BTNS["reboot"][1]:
                         settings_save_and_exit()
