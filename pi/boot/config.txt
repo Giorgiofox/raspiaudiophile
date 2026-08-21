@@ -60,3 +60,7 @@ disable_splash=1
 boot_delay=0
 initial_turbo=60
 #dtoverlay=caldera-tft,rotate=270,speed=32000000
+
+# 3A+ soft temp limit: default 60 C sits right at the closed-case
+# playback plateau (58-59 C measured); 70 keeps full clock in summer
+temp_soft_limit=70
