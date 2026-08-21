@@ -343,7 +343,7 @@ def wrap2(draw, text, font, max_w):
     return lines
 
 
-VIEW = {"mode": 0}  # 0 info, 1 fullscreen cover, 2 VU meters, 3 standby/diag
+VIEW = {"mode": 0, "standby": False}  # modes: info, fullscreen, VU
 
 
 SETTING_ITEMS = [
@@ -428,9 +428,10 @@ def settings_save_and_exit() -> None:
 SET_ROW_Y0, SET_ROW_H = 92, 50
 SET_BTN_Y = 410
 SET_BTNS = {   # name -> (x0, x1) at SET_BTN_Y..H
-    "back": (16, 260),
-    "reboot": (300, 500),
-    "poweroff": (540, 784),
+    "back": (16, 196),
+    "standby": (208, 388),
+    "reboot": (400, 580),
+    "poweroff": (592, 784),
 }
 
 
@@ -452,11 +453,13 @@ def render_settings() -> Image.Image:
         d.text((W - 28, y + 12), _fmt_setting(key), font=F_TEXT,
                fill=FG if sel else DIM, anchor="rm")
     for name, (x0, x1) in SET_BTNS.items():
-        col = {"back": (60, 60, 68), "reboot": (70, 55, 25), "poweroff": (80, 30, 25)}[name]
+        col = {"back": (60, 60, 68), "standby": (35, 50, 65),
+               "reboot": (70, 55, 25), "poweroff": (80, 30, 25)}[name]
         d.rounded_rectangle((x0, SET_BTN_Y, x1, H - 14), radius=10, fill=col)
-        lbl = {"back": "Back", "reboot": "Reboot", "poweroff": "Power off"}[name]
+        lbl = {"back": "Back", "standby": "Standby",
+               "reboot": "Reboot", "poweroff": "Power off"}[name]
         d.text(((x0 + x1) // 2, (SET_BTN_Y + H - 14) // 2), lbl,
-               font=F_FMT, fill=FG, anchor="mm")
+               font=F_TEXT, fill=FG, anchor="mm")
     return img
 
 
@@ -497,6 +500,9 @@ def touch_listener() -> None:
                 if cur_y >= SET_BTN_Y:
                     if SET_BTNS["back"][0] <= cur_x <= SET_BTNS["back"][1]:
                         settings_save_and_exit()
+                    elif SET_BTNS["standby"][0] <= cur_x <= SET_BTNS["standby"][1]:
+                        settings_save_and_exit()
+                        VIEW["standby"] = True
                     elif SET_BTNS["reboot"][0] <= cur_x <= SET_BTNS["reboot"][1]:
                         settings_save_and_exit()
                         os.system("sudo /sbin/reboot")
@@ -513,6 +519,8 @@ def touch_listener() -> None:
                     i = (cur_y - (SET_ROW_Y0 - 10)) // SET_ROW_H
                     if 0 <= i < len(SETTING_ITEMS):
                         SETTINGS["idx"] = int(i)   # tap a row to select it
+            elif VIEW["standby"]:
+                VIEW["standby"] = False    # any tap returns to the views
             elif cur_x is not None and cur_y is not None \
                     and cur_y < 110 and cur_x > W - 190:
                 # top-right corner in any view: open the settings menu
@@ -531,7 +539,7 @@ def touch_listener() -> None:
                     VU_SKIN["i"] = (VU_SKIN["i"] + 1) % len(SKIN_LIST)
                     VU_SKIN["at"] = now
             else:
-                VIEW["mode"] = (VIEW["mode"] + 1) % 4
+                VIEW["mode"] = (VIEW["mode"] + 1) % 3
 
 
 def render(state: str, vol: int, meta: dict, cover: Image.Image | None,
@@ -1758,7 +1766,9 @@ def main() -> None:
             t_ms = int(tl.get("time", 0))
             if state == "playing":
                 t_ms += int((now - tl_at) * 1000)  # interpolate between polls
-            if VIEW["mode"] == 1:
+            if VIEW["standby"]:
+                img = render_idle(vol)
+            elif VIEW["mode"] == 1:
                 fb_out(render_fullscreen_fb(cover, vol, last_key, meta.get("format", ""),
                                                     t_ms, int(tl.get("duration", 0)), levels))
                 last_frame = b""
@@ -1779,8 +1789,6 @@ def main() -> None:
                 last_frame = b""
                 time.sleep(0.028)   # ~20 fps: this LCD needs ~45 ms between needle positions or it ghosts doubles
                 continue
-            elif VIEW["mode"] == 3:
-                img = render_idle(vol)   # standby view: IP, Wi-Fi, diagnostics
             else:
                 img = render(state or "?", vol, meta, cover,
                              t_ms, int(tl.get("duration", 0)), levels)
