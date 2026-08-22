@@ -668,10 +668,14 @@ def vu_capture() -> None:
                 alpha = min(1.0, (now - last) / 0.065)  # VU: 99% in 300 ms
                 last = now
                 for ch, v in (("l", word & 0xFFFF), ("r", (word >> 16) & 0xFFFF)):
-                    # v == 0 is true silence: floor deep enough that the
-                    # volume compensation can never lift it off the pin
-                    db = 20 * math.log10(v / 100.0) if v > 0 else -90.0
-                    VU_LEVELS[ch] += (db - VU_LEVELS[ch]) * alpha
+                    # true-VU behavior: integrate the RECTIFIED level in the
+                    # linear domain (tau 65 ms = 99% in 300 ms, the VU
+                    # standard). Averaging peaks in dB tracked the peak-hold
+                    # instead and the needles barely moved with the music.
+                    lin = v / 100.0
+                    prev = 10.0 ** (VU_LEVELS[ch] / 20.0)
+                    prev += (lin - prev) * alpha
+                    VU_LEVELS[ch] = 20.0 * math.log10(prev) if prev > 3e-5 else -90.0
         except Exception:
             VU_LEVELS["l"] = VU_LEVELS["r"] = -60.0
             time.sleep(1)
