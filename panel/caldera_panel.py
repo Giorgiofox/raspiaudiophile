@@ -366,7 +366,7 @@ def _fmt_setting(key) -> str:
     if key == "detent_div":
         return "fast" if v <= 1 else "fine"
     if key == "vu_trim":
-        return f"{v:+.2f} dB"
+        return f"{v:+.1f} dB"
     if key == "hold_off":
         return f"{v} s"
     return str(v)
@@ -385,7 +385,8 @@ def settings_adjust(d: int) -> None:
     elif key == "detent_div":
         RT["detent_div"] = 2 if d > 0 else 1
     elif key == "vu_trim":
-        RT["vu_trim"] = max(-3.0, min(3.0, round(RT["vu_trim"] + 0.25 * d, 2)))
+        # positive = livelier needles (lifts quiet passages up the scale)
+        RT["vu_trim"] = max(-12.0, min(12.0, round(RT["vu_trim"] + 0.5 * d, 1)))
     elif key == "hold_off":
         RT["hold_off"] = max(3, min(10, RT["hold_off"] + d))
     elif key == "def_skin":
@@ -969,7 +970,7 @@ def render_fullscreen_fb(cover: Image.Image | None, vol: int, key, fmt: str = ""
     now = time.monotonic()
     dt = min(0.3, now - _VU_LAST_T["t"]) if _VU_LAST_T["t"] else 0.03
     atten = vu_comp_db(vol)
-    target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - (VU_REF_DBFS + RT["vu_trim"]) + atten
+    target = max(VU_LEVELS["l"], VU_LEVELS["r"]) - VU_REF_DBFS + RT["vu_trim"] + atten
     FS_DISP["m"] = vu_step(FS_DISP["m"], target, dt)
     a = _vu_angle(FS_DISP["m"])
     cx, py = FS_FACE_W // 2, FS_PIVOT_Y
@@ -1064,7 +1065,7 @@ def render_vu_fb(levels, t_ms: int, dur_ms: int, vol: int, fmt: str = "",
     _VU_LAST_T["t"] = now
     for mx, ch in ((8, "l"), (404, "r")):
         atten = vu_comp_db(vol)
-        target = VU_LEVELS[ch] - (VU_REF_DBFS + RT["vu_trim"]) + atten
+        target = VU_LEVELS[ch] - VU_REF_DBFS + RT["vu_trim"] + atten
         VU_DISP[ch] = vu_step(VU_DISP[ch], target, dt)
         a = _vu_angle(VU_DISP[ch])
         cx = VU_MW // 2
