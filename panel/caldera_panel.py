@@ -1176,9 +1176,9 @@ class PeppySkin:
         self.rects = []
         for i, (ox, oy) in enumerate(self.origins):
             if len(self.origins) == 1:
-                db = max(VU_LEVELS["l"], VU_LEVELS["r"]) + atten
+                db = max(VU_LEVELS["l"], VU_LEVELS["r"]) + atten + RT["vu_trim"]
             else:
-                db = VU_LEVELS["l" if i == 0 else "r"] + atten
+                db = VU_LEVELS["l" if i == 0 else "r"] + atten + RT["vu_trim"]
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
             step = (v - self.disp[i]) * min(1.0, dt / 0.08)
             lim = (100.0 / 0.45) * dt           # heavier needle: this LCD ghosts fast sweeps
@@ -1266,7 +1266,7 @@ class PeppyLinearSkin:
             frame.paste(im, (px, py), im)
 
         for i, (x, y, ind, left) in enumerate(self.ch):
-            db = VU_LEVELS["l" if i == 0 else "r"] + atten
+            db = VU_LEVELS["l" if i == 0 else "r"] + atten + RT["vu_trim"]
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
             step = (v - self.disp[i]) * min(1.0, dt / 0.08)
             lim = (100.0 / 0.45) * dt
