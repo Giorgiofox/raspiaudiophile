@@ -999,11 +999,13 @@ VU_TXT_W, VU_TXT_H = 170, 46
 VU_TXT_X = 404 + VU_MW - VU_TXT_W - 10
 VU_TXT_Y = VU_FACE_Y + VU_MH - VU_TXT_H - 8
 VU_DISP = {"l": VU_MIN, "r": VU_MIN}
-VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.45   # mechanical limit: full scale in 450 ms (heavier needle: this LCD ghosts fast sweeps)
+VU_SLEW_DB_S = (VU_MAX - VU_MIN) / 0.30   # mechanical limit: full scale in 300 ms (the capture integration is the real ballistics now)
 
 
 def vu_step(disp: float, target: float, dt: float) -> float:
-    step = (max(VU_MIN, min(VU_MAX, target)) - disp) * min(1.0, dt / 0.08)
+    # near-passthrough: smoothing lives in the capture integrator, a second
+    # heavy filter here was eating the snare hits
+    step = (max(VU_MIN, min(VU_MAX, target)) - disp) * min(1.0, dt / 0.035)
     lim = VU_SLEW_DB_S * dt
     return disp + max(-lim, min(lim, step))
 _VU_LAST_T = {"t": 0.0}
@@ -1184,8 +1186,8 @@ class PeppySkin:
             else:
                 db = VU_LEVELS["l" if i == 0 else "r"] + atten + RT["vu_trim"]
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
-            step = (v - self.disp[i]) * min(1.0, dt / 0.08)
-            lim = (100.0 / 0.45) * dt           # heavier needle: this LCD ghosts fast sweeps
+            step = (v - self.disp[i]) * min(1.0, dt / 0.035)
+            lim = (100.0 / 0.30) * dt
             self.disp[i] += max(-lim, min(lim, step))
             start, stop = self.angles[i]
             a = start + (stop - start) * self.disp[i] / 100.0
@@ -1272,8 +1274,8 @@ class PeppyLinearSkin:
         for i, (x, y, ind, left) in enumerate(self.ch):
             db = VU_LEVELS["l" if i == 0 else "r"] + atten + RT["vu_trim"]
             v = 100.0 * (10.0 ** (min(0.0, db) / 20.0))
-            step = (v - self.disp[i]) * min(1.0, dt / 0.08)
-            lim = (100.0 / 0.45) * dt
+            step = (v - self.disp[i]) * min(1.0, dt / 0.035)
+            lim = (100.0 / 0.30) * dt
             self.disp[i] += max(-lim, min(lim, step))
             n = min(int(self.disp[i] / self.step), len(self.masks) - 1)
             w = max(1, self.masks[n])
