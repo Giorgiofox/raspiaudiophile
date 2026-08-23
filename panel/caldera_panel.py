@@ -71,7 +71,7 @@ RT = {
     "def_skin": cfg("skins", "default", "amber"),
     "hold_off": cfg("encoder", "shutdown_hold_s", 6),
 }
-SETTINGS = {"on": False, "idx": 0, "at": 0.0}
+SETTINGS = {"on": False, "idx": 0, "at": 0.0, "test": False}
 BRIGHT_PATH = Path("/sys/class/backlight/rpi_backlight/brightness")
 
 
@@ -426,14 +426,66 @@ def settings_save_and_exit() -> None:
     SETTINGS["on"] = False
 
 
-SET_ROW_Y0, SET_ROW_H = 92, 50
-SET_BTN_Y = 410
-SET_BTNS = {   # name -> (x0, x1) at SET_BTN_Y..H
-    "back": (16, 196),
-    "standby": (208, 388),
-    "reboot": (400, 580),
-    "poweroff": (592, 784),
+SET_ROW_Y0, SET_ROW_H = 86, 44
+# name -> (x0, y0, x1, y1); two rows of action buttons
+SET_BTNS = {
+    "back":     (16, 352, 268, 408),
+    "standby":  (276, 352, 528, 408),
+    "chantest": (536, 352, 784, 408),
+    "reboot":   (16, 416, 396, 472),
+    "poweroff": (404, 416, 784, 472),
 }
+SET_BTN_LABEL = {"back": "Back", "standby": "Standby", "chantest": "Channel test",
+                 "reboot": "Reboot", "poweroff": "Power off"}
+SET_BTN_COL = {"back": (60, 60, 68), "standby": (35, 50, 65),
+               "chantest": (30, 60, 45), "reboot": (70, 55, 25),
+               "poweroff": (80, 30, 25)}
+
+
+def _chan_frame(text: str, sub: str) -> None:
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((W // 2, H // 2 - 30), text, font=F_DBFS, fill=ACCENT, anchor="mm")
+    d.text((W // 2, H // 2 + 70), sub, font=F_TEXT, fill=DIM, anchor="mm")
+    fb_write(img)
+
+
+def channel_test() -> None:
+    """Same tone on one channel at a time, LEFT then RIGHT, labelled on
+    screen. Stops Caldera to own the DAC, restores it after. Runs in its
+    own thread; SETTINGS['test'] freezes the menu render while it plays."""
+    import subprocess
+    sr = 44100
+    dev = "plughw:CARD=sndrpihifiberry"
+    try:
+        _chan_frame("TEST", "freeing the audio device...")
+        subprocess.run(["systemctl", "--user", "stop",
+                        "caldera-watchdog.timer", "caldera-music"],
+                       capture_output=True, timeout=25)
+        time.sleep(1.5)
+        for label, chan in (("LEFT", 0), ("RIGHT", 1)):
+            buf = bytearray()
+            for i in range(sr * 3):
+                sample = int(32767 * 0.10 * math.sin(2 * math.pi * 440 * i / sr))
+                l = sample if chan == 0 else 0
+                r = sample if chan == 1 else 0
+                buf += l.to_bytes(2, "little", signed=True)
+                buf += r.to_bytes(2, "little", signed=True)
+            _chan_frame(label, "this channel should play now")
+            proc = subprocess.Popen(["aplay", "-q", "-D", dev, "-f", "S16_LE",
+                                     "-r", str(sr), "-c", "2"],
+                                    stdin=subprocess.PIPE)
+            proc.communicate(bytes(buf), timeout=8)
+            time.sleep(0.8)
+        _chan_frame("DONE", "restarting player...")
+    except Exception:
+        pass
+    finally:
+        subprocess.run(["systemctl", "--user", "start",
+                        "caldera-music", "caldera-watchdog.timer"],
+                       capture_output=True, timeout=25)
+        time.sleep(1.0)
+        SETTINGS["test"] = False
 
 
 def render_settings() -> Image.Image:
@@ -453,13 +505,9 @@ def render_settings() -> Image.Image:
                fill=ACCENT if sel else FG, anchor="lm")
         d.text((W - 28, y + 12), _fmt_setting(key), font=F_TEXT,
                fill=FG if sel else DIM, anchor="rm")
-    for name, (x0, x1) in SET_BTNS.items():
-        col = {"back": (60, 60, 68), "standby": (35, 50, 65),
-               "reboot": (70, 55, 25), "poweroff": (80, 30, 25)}[name]
-        d.rounded_rectangle((x0, SET_BTN_Y, x1, H - 14), radius=10, fill=col)
-        lbl = {"back": "Back", "standby": "Standby",
-               "reboot": "Reboot", "poweroff": "Power off"}[name]
-        d.text(((x0 + x1) // 2, (SET_BTN_Y + H - 14) // 2), lbl,
+    for name, (x0, y0, x1, y1) in SET_BTNS.items():
+        d.rounded_rectangle((x0, y0, x1, y1), radius=10, fill=SET_BTN_COL[name])
+        d.text(((x0 + x1) // 2, (y0 + y1) // 2), SET_BTN_LABEL[name],
                font=F_TEXT, fill=FG, anchor="mm")
     return img
 
@@ -498,27 +546,34 @@ def touch_listener() -> None:
                 if cur_x is None or cur_y is None:
                     continue
                 SETTINGS["at"] = now
-                if cur_y >= SET_BTN_Y:
-                    if SET_BTNS["back"][0] <= cur_x <= SET_BTNS["back"][1]:
-                        settings_save_and_exit()
-                    elif SET_BTNS["standby"][0] <= cur_x <= SET_BTNS["standby"][1]:
-                        settings_save_and_exit()
-                        companion_cmd("pause")   # real standby: playback stops
-                        VIEW["standby"] = True
-                    elif SET_BTNS["reboot"][0] <= cur_x <= SET_BTNS["reboot"][1]:
-                        settings_save_and_exit()
-                        os.system("sudo /sbin/reboot")
-                    elif SET_BTNS["poweroff"][0] <= cur_x <= SET_BTNS["poweroff"][1]:
-                        settings_save_and_exit()
-                        SHUTDOWN["on"] = True
-                        time.sleep(0.1)
-                        img = Image.new("RGB", (W, H), BG)
-                        ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
-                                                 font=F_TITLE, fill=FG, anchor="mm")
-                        fb_write(img)
-                        os.system("sudo /sbin/poweroff")
-                elif SET_ROW_Y0 - 10 <= cur_y:
-                    i = (cur_y - (SET_ROW_Y0 - 10)) // SET_ROW_H
+                hit = None
+                for name, (bx0, by0, bx1, by1) in SET_BTNS.items():
+                    if bx0 <= cur_x <= bx1 and by0 <= cur_y <= by1:
+                        hit = name
+                        break
+                if hit == "back":
+                    settings_save_and_exit()
+                elif hit == "standby":
+                    settings_save_and_exit()
+                    companion_cmd("pause")   # real standby: playback stops
+                    VIEW["standby"] = True
+                elif hit == "chantest":
+                    SETTINGS["test"] = True
+                    threading.Thread(target=channel_test, daemon=True).start()
+                elif hit == "reboot":
+                    settings_save_and_exit()
+                    os.system("sudo /sbin/reboot")
+                elif hit == "poweroff":
+                    settings_save_and_exit()
+                    SHUTDOWN["on"] = True
+                    time.sleep(0.1)
+                    img = Image.new("RGB", (W, H), BG)
+                    ImageDraw.Draw(img).text((W // 2, H // 2), "Shutting down...",
+                                             font=F_TITLE, fill=FG, anchor="mm")
+                    fb_write(img)
+                    os.system("sudo /sbin/poweroff")
+                elif SET_ROW_Y0 - 8 <= cur_y < SET_BTNS["back"][1]:
+                    i = (cur_y - (SET_ROW_Y0 - 8)) // SET_ROW_H
                     if 0 <= i < len(SETTING_ITEMS):
                         SETTINGS["idx"] = int(i)   # tap a row to select it
             elif VIEW["standby"]:
@@ -1704,6 +1759,9 @@ def main() -> None:
             time.sleep(1.0)       # renders frozen: the goodbye screen stays
             continue
         if SETTINGS["on"]:
+            if SETTINGS["test"]:
+                time.sleep(0.2)          # channel_test owns the screen
+                continue
             if time.monotonic() - SETTINGS["at"] > 60.0:
                 settings_save_and_exit()   # forgotten menu: save and leave
             else:
